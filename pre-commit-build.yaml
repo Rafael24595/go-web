@@ -1,0 +1,31 @@
+hooks:
+  remote:
+    repos:
+      - id: check-large-files
+        origin: https://github.com/Rafael24595/hooks
+        tag: 0.8.3
+        target: tools/sh
+        name: check-large-files.sh
+        args:
+          - 5242880
+
+      - id: check-go-context
+        origin: https://github.com/Rafael24595/hooks
+        tag: 0.8.3
+        target: golang/sh
+        name: check-go-context.sh
+        expect: false
+        return: true
+
+      - id: run-linter
+        origin: https://github.com/Rafael24595/hooks
+        tag: 0.8.3
+        target: golang/sh
+        name: run-linter.sh
+
+      - id: run-tests
+        origin: https://github.com/Rafael24595/hooks
+        tag: 0.8.3
+        target: golang/sh
+        name: run-tests.sh
+
