@@ -1,0 +1,108 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write 
+
+jobs:
+  block-non-main:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [[ "${GITHUB_REF_NAME}" != "main" ]]; then
+            echo "🚫 Manual dispatch is only allowed from the 'main' branch."
+            exit 1
+          fi
+          echo "✅ Branch '${GITHUB_REF_NAME}' allowed. Continuing..."
+
+  validate-version:
+      needs: block-non-main
+      runs-on: ubuntu-latest
+      outputs:
+        version: ${{ steps.check.outputs.version }}
+      steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
+        
+        - name: Install yq
+          run: |
+            sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+            sudo chmod +x /usr/bin/yq
+
+        - name: Validate version format
+          id: check
+          run: |
+            VERSION=$(yq '.project.version' go.package.yml)
+            if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9\.-]+)?$ ]]; then
+              echo "❌ Invalid version format: $VERSION"
+              echo "✅ Expected format: v1.2.3 or v1.2.3-beta.1"
+              exit 1
+            fi
+            echo "✅ Valid version: $VERSION"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+  check-tag:
+    needs: validate-version
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch tags and check for existing tag
+        id: check
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          git fetch --tags
+
+          if git rev-parse "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION exists."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $VERSION does not exist."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+            
+  build-and-release:
+    needs: [validate-version, check-tag]
+    if: needs.check-tag.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24.0'
+
+      - name: Prepare Go module for release
+        run: |
+          VERSION=${{ needs.validate-version.outputs.version }}
+          go mod tidy
+          go test ./...
+          git archive --format=tar.gz --output=go-api-core-${VERSION}.tar.gz HEAD
+
+      - name: Push Git Tag
+        run: |
+           VERSION=${{ needs.validate-version.outputs.version }}
+           git config user.name "github-actions"
+           git config user.email "github-actions@github.com"
+           git tag $VERSION
+           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+           git push origin $VERSION
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Create GitHub Release
+        run: |
+          VERSION=${{ needs.validate-version.outputs.version }}
+          gh release create $VERSION go-api-core-${VERSION}.tar.gz \
+            --title "Release $VERSION" \
+            --notes "Automated release of $VERSION"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN  }}
