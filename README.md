@@ -5,7 +5,8 @@ A lightweight and extensible Go web framework providing:
 - HTTP routing with flexible handlers
 - CORS configuration
 - Panic and error handling
-- Request/response result utilities
+- Result handling with multiple response formats
+- Built-in support for JSON, XML, and plain text responses
 - Documentation support (generic + Swagger/OpenAPI)
 
 ---
@@ -134,25 +135,120 @@ route := router.NewRouter().Cors(cors)
 
 ---
 
-### 3. Result
+### 3. Result Handling
 
-The `result` package provides a unified way of handling success/error responses.
+The `Result` type standardizes how responses are returned from route handlers.
 
-```go
-res := result.Ok(data)              // 200 OK
-res := result.Oks(201, data)        // custom status success
-res := result.Err(400, err)         // error with status
-res := result.Accept(202)           // accepted without payload
-res := result.Reject(403)           // reject without payload
-```
+#### Custom Encoders
 
-Accessors:
+You can create your own response format by implementing the `ResultEncoder` interface. This allows full control over how the payload is serialized and which headers are returned.
+
+#### Example: Uppercase Text Encoder
 
 ```go
-status := res.Status()
-okValue, isOk := res.Ok()
-errValue, isErr := res.Err()
+// CustomEncoder implements the ResultEncoder interface
+type CustomEncoder struct{}
+
+// Encode converts the payload to a custom string format
+func (c *CustomEncoder) Encode(payload any) ([]byte, error) {
+	// Example: convert any payload to uppercase string
+	payloadStr := fmt.Sprintf("%v", payload)
+	payloadStr = strings.ToUpper(payloadStr)
+	return []byte(payloadStr), nil
+}
+
+// Headers returns custom headers for the response
+func (c *CustomEncoder) Headers() map[string]string {
+	return map[string]string{
+		"Content-Type": "text/custom",
+	}
+}
 ```
+
+#### Success Responses (200 OK by default)
+- `Ok(payload)` → Successful response (`200 OK`) with plain text encoder.
+- `JsonOk(payload)` → Successful response (`200 OK`) encoded as JSON.
+- `XmlOk(payload)` → Successful response (`200 OK`) encoded as XML.
+- `CustomOk(payload, encoder)` → Successful response (`200 OK`) with a custom encoder.
+
+```go
+// Plain text
+return result.Ok("Operation successful")
+
+// JSON
+payload := map[string]string{"message": "Operation successful"}
+return result.JsonOk(payload)
+
+// XML
+return result.XmlOk(struct {
+    Message string `xml:"message"`
+}{"Operation successful"})
+
+// Custom encoder
+return result.CustomOk("Custom response", &CustomEncoder{})
+```
+
+#### Success Responses with Custom HTTP Status
+- `Oks(status, payload)` → Successful response with a custom HTTP status code and plain text encoder.
+- `JsonOks(status, payload)` → Successful response with a custom HTTP status code, encoded as JSON.
+- `XmlOks(status, payload)` → Successful response with a custom HTTP status code, encoded as XML.
+- `CustomOks(status, payload, encoder)` → Successful response with a custom HTTP status code and encoder.
+
+```go
+// Plain text with status 201 Created
+return result.Oks(201, "Resource created")
+
+// JSON with status 202 Accepted
+return result.JsonOks(202, map[string]string{"status": "accepted"})
+
+// XML with status 204 No Content
+return result.XmlOks(204, struct{}{})
+
+// Custom encoder with status 200 OK
+return result.CustomOks(200, myPayload, &CustomEncoder{})
+```
+
+#### Error Responses
+- `Err(status, error)` → Error response with a specific HTTP status code and error message, plain text by default.
+- `JsonErr(status, payload)` → Error response with a specific HTTP status code, encoded as JSON.
+- `XmlErr(status, payload)` → Error response with a specific HTTP status code, encoded as XML.
+- `CustomErr(status, payload, encoder)` → Error response with a specific HTTP status code and a custom encoder.
+
+```go
+// Plain text error
+return result.Err(400, errors.New("Bad request"))
+
+// JSON error
+return result.JsonErr(404, map[string]string{"error": "Not found"})
+
+// XML error
+return result.XmlErr(500, struct {
+    Message string `xml:"message"`
+}{"Internal server error"})
+
+// Custom encoder for errors
+return result.CustomErr(403, "Forbidden", &CustomEncoder{})
+```
+
+#### Responses without payload
+- `Accept(status)` → Accept response with no payload (success) and custom HTTP status code.
+- `Reject(status)` → Reject response with no payload (failure) and custom HTTP status code.
+
+```go
+// Accept with status 202
+return result.Accept(202)
+
+// Reject with status 403
+return result.Reject(403)
+```
+
+#### Accessors
+
+- `Status()` → Returns the HTTP status code associated with the `Result`.
+- `Encoder()` → Returns the `ResultEncoder` used to serialize the payload.
+- `Payload()` → Returns the payload of the `Result`.
+- `Ok()` → Returns `true` if the result is successful.
+- `Err()` → Returns `true` if the result represents an error.
 
 ---
 
@@ -225,12 +321,23 @@ type DtoGreetings struct {
     Message string `json:"message" description:"Message"`
 }
 
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    user, _ := ctx.Get("username")
+	return result.CustomOk(fmt.Sprintf("hello %v from world", user), &CustomEncoder{})
+}
+
 func main() {
     route := router.NewRouter()
     route.Logger(customLog)
 
     cors := router.PermissiveCors()
     route.Cors()
+
+    route.Contextualizer(func(http.ResponseWriter, *http.Request) (Context, error) {
+        context := collection.DictionaryEmpty[string, any]()
+        context.Put("username", "admin")
+        return context, nil
+    })
 
     route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
         http.Error(w, "Something went wrong", http.StatusInternalServerError)

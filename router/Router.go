@@ -1,7 +1,6 @@
 package router
 
 import (
-	"encoding/json"
 	"fmt"
 	stdlog "log"
 	"net/http"
@@ -18,6 +17,8 @@ type contextHandler = func(http.ResponseWriter, *http.Request) (Context, error)
 type requestHandler = func(http.ResponseWriter, *http.Request, Context) result.Result
 type errorHandler = func(http.ResponseWriter, *http.Request, Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
+
+const BASE = "$BASE"
 
 // HandlerOptions represents advanced configuration for a route handler.
 //
@@ -170,7 +171,7 @@ func (r *Router) ResourcesPath(path string) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) Contextualizer(handler contextHandler) *Router {
-	r.contextualizer.Put("$BASE", handler)
+	r.contextualizer.Put(BASE, handler)
 	return r
 }
 
@@ -219,7 +220,7 @@ func (r *Router) GroupContextualizerDocument(handler requestHandler, doc docs.Do
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) ErrorHandler(handler errorHandler) *Router {
-	r.errors.Put("$BASE", handler)
+	r.errors.Put(BASE, handler)
 	return r
 }
 
@@ -233,7 +234,7 @@ func (r *Router) ErrorHandler(handler errorHandler) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) PanicHandler(handler panicHandler) *Router {
-	r.panics.Put("$BASE", handler)
+	r.panics.Put(BASE, handler)
 	return r
 }
 
@@ -440,24 +441,25 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 		r.logger.Errors("Request handler not found")
 	}
 
-	context, ok := r.initializeContext(wrt, req)
-	if !ok {
+	ctx, ctxResult := r.initializeContext(wrt, req)
+	if ctxResult != nil {
+		r.manageErr(wrt, req, ctx, *ctxResult)
 		return
 	}
 
-	result := (*handler)(wrt, req, context)
-	if response, ok := result.Ok(); ok {
-		r.manageOk(wrt, result, response)
+	result := (*handler)(wrt, req, ctx)
+	if result.Ok() {
+		r.manageOk(wrt, result)
 		return
 	}
 
-	r.manageErr(wrt, req, context, result)
+	r.manageErr(wrt, req, ctx, result)
 }
 
-func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (Context, bool) {
+func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (Context, *result.Result) {
 	contextualizer, ok := r.contextualizer.Get(req.Pattern)
 	if !ok {
-		contextualizer, ok = r.contextualizer.Get("$BASE")
+		contextualizer, ok = r.contextualizer.Get(BASE)
 	}
 
 	var context Context
@@ -478,53 +480,43 @@ func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (
 	for _, key := range keys.Collect() {
 		funcs, ok := r.groupContextualizers.Get(key)
 		if !ok {
-			return context, false
+			return context, nil
 		}
 
 		for _, f := range funcs.Collect() {
 			result := f(wrt, req, context)
 
-			err, ok := result.Err()
-			if !ok {
-				continue
+			if result.Err() {
+				return context, &result
 			}
-
-			if err == nil {
-				wrt.WriteHeader(result.Status())
-				return context, false
-			}
-
-			http.Error(wrt, err.Error(), result.Status())
-			return context, false
 		}
 	}
 
-	return context, true
+	return context, nil
 }
 
-func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result, response any) {
+func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result) {
+	encoder := result.Encoder()
+	encode, err := encoder.Encode(result.Payload())
+	if err != nil {
+		http.Error(wrt, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if result.Err() {
+		http.Error(wrt, string(encode), result.Status())
+		return
+	}
+
 	wrt.WriteHeader(result.Status())
 
-	switch res := response.(type) {
-	case nil:
-	case string:
-		if _, err := wrt.Write([]byte(res)); err != nil {
-			r.logger.Error(err)
-		}
-	case []byte:
-		if _, err := wrt.Write(res); err != nil {
-			r.logger.Error(err)
-		}
-	case error:
-		http.Error(wrt, res.Error(), http.StatusInternalServerError)
-		return
-	default:
-		wrt.Header().Set("Content-Type", "application/json")
+	for k, v := range encoder.Headers() {
+		wrt.Header().Set(k, v)
+	}
 
-		if err := json.NewEncoder(wrt).Encode(res); err != nil {
-			http.Error(wrt, err.Error(), http.StatusInternalServerError)
-		}
-
+	_, err = wrt.Write(encode)
+	if err != nil {
+		r.logger.Errorf("Error writing response: %s", err.Error())
 		return
 	}
 }
@@ -532,7 +524,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result, respons
 func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context Context, result result.Result) {
 	errorHandler, ok := r.errors.Get(req.Pattern)
 	if !ok {
-		errorHandler, ok = r.errors.Get("$BASE")
+		errorHandler, ok = r.errors.Get(BASE)
 	}
 
 	if ok {
@@ -540,18 +532,13 @@ func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context C
 		return
 	}
 
-	if err, ok := result.Err(); ok && err != nil {
-		http.Error(wrt, err.Error(), result.Status())
-		return
-	}
-
-	wrt.WriteHeader(result.Status())
+	r.manageOk(wrt, result)
 }
 
 func (r *Router) managePanic(wrt http.ResponseWriter, req *http.Request, rec any) {
 	panicHandler, ok := r.panics.Get(req.Pattern)
 	if !ok {
-		panicHandler, ok = r.panics.Get("$BASE")
+		panicHandler, ok = r.panics.Get(BASE)
 	}
 
 	if ok {
