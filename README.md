@@ -27,7 +27,7 @@ The `Router` is the central component that manages route registration, handlers,
 #### Basic route
 
 ```go
-router.Route("GET", handler, "/hello")
+route.Route("GET", handler, "/hello")
 ```
 
 #### With parameters
@@ -230,7 +230,7 @@ func main() {
     route.Logger(customLog)
 
     cors := router.PermissiveCors()
-    route.Cors()
+    route.Cors(cors)
 
     route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
         http.Error(w, "Something went wrong", http.StatusInternalServerError)
