@@ -2,9 +2,10 @@
 
 A lightweight and extensible Go web framework providing:
 
-- HTTP routing with flexible handlers
+- Flexible HTTP routing and handlers
 - CORS configuration
-- Panic and error handling
+- Panic recovery and error handling
+- Input deserialization for JSON and XML
 - Result handling with multiple response formats
 - Built-in support for JSON, XML, and plain text responses
 - Documentation support (generic + Swagger/OpenAPI)
@@ -62,9 +63,9 @@ doc := docs.DocRoute{
 	Parameters: docs.DocParameters{
 		PLACE: PLACE_DESC,
 	},
-	Request: docs.DocJsonPayload(DtoPlace{}),
+	Request: docs.DocJsonPayload[DtoPlace](),
 	Responses: docs.DocResponses{
-        "200": docs.DocXmlPayload([]DtoGreetings{}),
+        "200": docs.DocXmlPayload[[]DtoGreetings](),
 		"418": docs.DocText(TEAPOT_DESC),
 	},
 }
@@ -97,6 +98,7 @@ route.ErrorHandler(func(http.ResponseWriter, *http.Request, Context, result.Resu
 		http.Error(wrt, err.Error(), result.Status())
 		return
 	}
+
 	wrt.WriteHeader(result.Status())
 })
 ```
@@ -122,6 +124,8 @@ cors := router.EmptyCors().
     AllowedMethods("GET", "POST").
     AllowedHeaders("Authorization").
     AllowCredentials()
+    
+route := router.NewRouter().Cors(cors)
 ```
 
 #### Permissive CORS
@@ -135,7 +139,58 @@ route := router.NewRouter().Cors(cors)
 
 ---
 
-### 3. Result Handling
+### 3 .Input Deserializers
+
+The framework provides built-in helper functions for deserializing request bodies into Go structs. These functions simplify handling JSON and XML payloads inside route handlers.
+
+#### JSON Input
+
+Parses the request body as JSON into a value of type T.
+- On success: returns the parsed payload and nil.
+- On failure: returns the zero value of T and a *result.Result with status 422 Unprocessable Entity.
+
+```go
+type User struct {
+    Name string `json:"name"`
+    Age  int    `json:"age"`
+}
+
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    user, res := router.InputJson[User](r)
+    if res != nil {
+        return *res
+    }
+
+    return result.JsonOk(map[string]string{
+        "message": "Hello " + user.Name,
+    })
+}
+```
+
+#### XML Input
+
+Parses the request body as XML into a value of type T. The decoder supports multiple character sets via golang.org/x/net/html/charset.
+- On success: returns the parsed payload and nil.
+- On failure: returns the zero value of T and a *result.Result with status 422 Unprocessable Entity.
+
+```go
+type Product struct {
+    ID    int    `xml:"id"`
+    Name  string `xml:"name"`
+    Price string `xml:"price"`
+}
+
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    product, res := router.InputXml[Product](r)
+    if res != nil {
+        return *res
+    }
+
+    return result.XmlOk(product)
+}
+```
+
+### 4. Result Handling
 
 The `Result` type standardizes how responses are returned from route handlers.
 
@@ -252,39 +307,33 @@ return result.Reject(403)
 
 ---
 
-### 4. Docs
+### 5. Docs
 
 The `docs` package models routes, payloads, parameters, and responses for generating documentation.
 
-#### Payloads
+#### Viewer
+
+**IDocViewer** provides an interface for implementing documentation viewers that will expose the project routing documentation.
 
 ```go
-payload := docs.DocJsonPayload(Example{}, "Example JSON response")
-payload := docs.DocXmlPayload(Example{}, "Example XML response")
-payload := docs.DocText("Plain text response")
+// IDocViewer defines an interface for a documentation viewer.
+type IDocViewer interface {
+	// Handlers returns a list of handlers that expose the documentation endpoints.
+	Handlers() []DocViewerHandler
+	// RegisterGroup registers a route group and its associated documentation.
+	RegisterGroup(group string, data DocGroup) IDocViewer
+	// RegisterRoute registers a single route operation and its documentation.
+	RegisterRoute(route DocOperation) IDocViewer
+}
 ```
 
-#### Tags
+#### Swagger Viewer
+
+The `swagger` package provides an implementation of IDocViewer for OpenAPI 3.0.
 
 ```go
-tags := docs.DocTags("auth", "users")
-```
+route := router.NewRouter()
 
-#### No-op viewer
-
-If you don’t want documentation:
-
-```go
-viewer := docs.VoidViewer()
-```
-
----
-
-### 5. Swagger
-
-The `swagger` package provides struct-to-schema conversion for OpenAPI.
-
-```go
 options := swagger.OpenAPI3ViewerOptions{
     Version:   "v1.0.0",
     EnableTLS: true,
@@ -299,6 +348,32 @@ viewer.Logger(customLog)
 viewer.Load(options)
 
 route.DocViewer(viewer)
+```
+
+#### No-op viewer
+
+If you don’t want documentation, the no-op viewer is used by default:
+
+```go
+route := router.NewRouter()
+viewer := docs.VoidViewer()
+route.DocViewer(viewer)
+```
+
+---
+
+#### Payloads
+
+```go
+payload := docs.DocJsonPayload[Example]("Example JSON response")
+payload := docs.DocXmlPayload[Example]("Example XML response")
+payload := docs.DocText("Plain text response")
+```
+
+#### Tags
+
+```go
+tags := docs.DocTags("auth", "users")
 ```
 
 ---
@@ -330,6 +405,21 @@ func main() {
     route := router.NewRouter()
     route.Logger(customLog)
 
+    options := swagger.OpenAPI3ViewerOptions{
+        Version:   "v1.0.0",
+        EnableTLS: true,
+        OnlyTLS:   false,
+        Port:      8080,
+        PortTLS:   8081,
+        FileYML:   "swagger.yaml",
+    }
+
+    viewer := swagger.NewViewer()
+    viewer.Logger(customLog)
+    viewer.Load(options)
+
+    route.DocViewer(viewer)
+
     cors := router.PermissiveCors()
     route.Cors(cors)
 
@@ -348,9 +438,9 @@ func main() {
         Parameters: docs.DocParameters{
             PLACE: PLACE_DESC,
         },
-        Request: docs.DocJsonPayload(DtoPlace{}),
+        Request: docs.DocJsonPayload[DtoPlace](),
         Responses: docs.DocResponses{
-            "200": docs.DocXmlPayload([]DtoGreetings{}),
+            "200": docs.DocXmlPayload[[]DtoGreetings](),
             "418": docs.DocText(TEAPOT_DESC),
         },
     }

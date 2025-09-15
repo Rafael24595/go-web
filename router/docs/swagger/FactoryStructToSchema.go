@@ -83,17 +83,18 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 		}
 	}
 
-	schema, err := f.makeSchema(media, t)
-	if err != nil {
-		return "", isVector, err
-	}
-
 	name := f.makeStructName(t)
 	mediaName := f.makeMediaName(media, name)
 	ref := f.makeRefString(mediaName)
 
-	if _, ok := f.seen[t]; !ok {
-		f.seen[t] = make(map[docs.MediaType]seen)
+	f.putSeen(t, media, seen{
+		ref:    ref,
+		name:   mediaName,
+	})
+
+	schema, err := f.makeSchema(media, t)
+	if err != nil {
+		return "", isVector, err
 	}
 
 	f.seen[t][media] = seen{
@@ -102,7 +103,21 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 		schema: *schema,
 	}
 
+	f.putSeen(t, media, seen{
+		ref:    ref,
+		name:   mediaName,
+		schema: *schema,
+	})
+
 	return ref, isVector, nil
+}
+
+func (f *FactoryStructToSchema) putSeen(t reflect.Type, media docs.MediaType, schema seen) {
+	if _, ok := f.seen[t]; !ok {
+		f.seen[t] = make(map[docs.MediaType]seen)
+	}
+
+	f.seen[t][media] = schema
 }
 
 func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type) (*Schema, error) {

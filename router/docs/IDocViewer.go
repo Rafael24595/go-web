@@ -96,12 +96,14 @@ type DocPayload struct {
 }
 
 // DocXmlPayload creates a DocPayload with XML media type.
-func DocXmlPayload(xml any, description ...string) DocPayload {
+func DocXmlPayload[T any](description ...string) DocPayload {
+	var xml T
 	return docPayload(xml, XML, description...)
 }
 
 // DocJsonPayload creates a DocPayload with JSON media type.
-func DocJsonPayload(json any, description ...string) DocPayload {
+func DocJsonPayload[T any](description ...string) DocPayload {
+	var json T
 	return docPayload(json, JSON, description...)
 }
 
