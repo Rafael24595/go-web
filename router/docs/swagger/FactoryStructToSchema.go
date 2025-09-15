@@ -364,7 +364,7 @@ func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, pkg, name st
 		nameFormat = caser.String(nameFormat)
 	}
 
-	return fmt.Sprintf("%s%s%s", mediaFormat, pkgFormat, nameFormat)
+	return fmt.Sprintf("%s_%s_%s", mediaFormat, pkgFormat, nameFormat)
 }
 
 func (f *FactoryStructToSchema) makeRefString(name string) string {
