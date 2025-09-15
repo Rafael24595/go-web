@@ -338,14 +338,18 @@ func (r *Router) Cors(cors *Cors) *Router {
 //
 // Example:
 //
-//	router.Listen(":8080")
+//	router.Listen(8080)
 //
 // CORS and other startup middlewares are automatically applied.
-func (r *Router) Listen(host string) error {
-	middleware := []middleware{
-		corsMiddleware(r.cors),
+func (r *Router) Listen(host int) error {
+	port := fmt.Sprintf(":%d", host)
+	
+	middleware := make([]middleware, 0)
+	if r.cors.IsNotEmpty() {
+		middleware = append(middleware, corsMiddleware(*r.cors))
 	}
-	return r.listen(host, middleware)
+	
+	return r.listen(port, middleware)
 }
 
 // ListenTLS starts an HTTPS server on the given host with TLS enabled.
@@ -354,12 +358,16 @@ func (r *Router) Listen(host string) error {
 //
 // Example:
 //
-//	router.ListenTLS(":8443", "server.crt", "server.key")
-func (r *Router) ListenTLS(hostTLS, certTLS, keyTLS string) error {
-	middleware := []middleware{
-		corsMiddleware(r.cors),
+//	router.ListenTLS(8443, "server.crt", "server.key")
+func (r *Router) ListenTLS(hostTLS int, certTLS, keyTLS string) error {
+	portTLS := fmt.Sprintf(":%d", hostTLS)
+
+	middleware := make([]middleware, 0)
+	if r.cors.IsNotEmpty() {
+		middleware = append(middleware, corsMiddleware(*r.cors))
 	}
-	return r.listenTLS(hostTLS, certTLS, keyTLS, middleware)
+
+	return r.listenTLS(portTLS, certTLS, keyTLS, middleware)
 }
 
 // ListenWithTLS starts both HTTP and HTTPS servers in parallel.
@@ -370,15 +378,18 @@ func (r *Router) ListenTLS(hostTLS, certTLS, keyTLS string) error {
 //
 // Example:
 //
-//	router.ListenWithTLS(":8080", ":8443", "server.crt", "server.key")
-func (r *Router) ListenWithTLS(host, hostTLS, certTLS, keyTLS string) error {
-	middleware := []middleware{
-		corsMiddleware(r.cors),
-		httpsRedirectMiddleware(hostTLS),
+//	router.ListenWithTLS(8080, 8443, "server.crt", "server.key")
+func (r *Router) ListenWithTLS(host, hostTLS int, certTLS, keyTLS string) error {
+	middleware := make([]middleware, 0)
+	middleware = append(middleware, httpsRedirectMiddleware(hostTLS))
+
+	if r.cors.IsNotEmpty() {
+		middleware = append(middleware, corsMiddleware(*r.cors))
 	}
 
 	go func() {
-		if err := r.listen(host, middleware); err != nil {
+		port := fmt.Sprintf(":%d", host)
+		if err := r.listen(port, middleware); err != nil {
 			r.logger.Error(err)
 		}
 	}()

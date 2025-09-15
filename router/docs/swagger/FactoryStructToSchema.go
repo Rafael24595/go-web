@@ -1,6 +1,7 @@
 package swagger
 
 import (
+	"encoding/xml"
 	"fmt"
 	"reflect"
 	"strings"
@@ -83,18 +84,24 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 		}
 	}
 
-	name := f.makeStructName(t)
-	mediaName := f.makeMediaName(media, name)
+	name, mediaName := f.makeStructName(media, t)
 	ref := f.makeRefString(mediaName)
 
 	f.putSeen(t, media, seen{
-		ref:    ref,
-		name:   mediaName,
+		ref:  ref,
+		name: mediaName,
 	})
 
 	schema, err := f.makeSchema(media, t)
 	if err != nil {
 		return "", isVector, err
+	}
+
+	if schema != nil && media == docs.XML {
+		schema.XML = &XML{
+			Name: name,
+			Wrapped: true,
+		}
 	}
 
 	f.seen[t][media] = seen{
@@ -132,7 +139,7 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 
-		if field.Anonymous {
+		if field.Anonymous || f.isMiscField(field) {
 			continue
 		}
 
@@ -164,6 +171,10 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 	}
 
 	return schema, nil
+}
+
+func (f *FactoryStructToSchema) isMiscField(field reflect.StructField) bool {
+	return field.Type == reflect.TypeOf(xml.Name{})
 }
 
 func (f *FactoryStructToSchema) addProperty(schema *Schema, name string, property *Schema, isRequired bool) *Schema {
@@ -302,15 +313,36 @@ func (f *FactoryStructToSchema) isVector(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice || t.Kind() == reflect.Array
 }
 
-func (f *FactoryStructToSchema) makeStructName(t reflect.Type) string {
+func (f *FactoryStructToSchema) makeStructName(media docs.MediaType, t reflect.Type) (string, string) {
 	name := t.Name()
 	if name == "" {
-		name = fmt.Sprintf("Anon%s", t.PkgPath())
+		name = "Anon"
 	}
-	return name
+
+	mediaName := f.makeMediaName(media, t.PkgPath(), name)
+
+	if xmlName, ok := f.hasXmlRoot(t); ok {
+		return xmlName, mediaName
+	}
+
+	return name, mediaName
 }
 
-func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, name string) string {
+func (f *FactoryStructToSchema) hasXmlRoot(t reflect.Type) (string, bool) {
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+
+		if field.Type == reflect.TypeOf(xml.Name{}) {
+			attribute := field.Tag.Get("xml")
+			tag := strings.Split(attribute, ",")[0]
+			return tag, tag != "" && tag != "-"
+		}
+	}
+
+	return "", false
+}
+
+func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, pkg, name string) string {
 	switch media {
 	case docs.XML:
 		media = "xml"
@@ -320,15 +352,19 @@ func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, name string)
 		media = ""
 	}
 
-	nameFormat := name
+	fragments := strings.Split(pkg, "/")
+	pkgFormat := fragments[len(fragments)-1]
+
 	mediaFormat := string(media)
+	nameFormat := name
 	if media != "" {
 		caser := cases.Title(language.Und, cases.NoLower)
-		nameFormat = caser.String(nameFormat)
 		mediaFormat = caser.String(mediaFormat)
+		pkgFormat = caser.String(pkgFormat)
+		nameFormat = caser.String(nameFormat)
 	}
 
-	return fmt.Sprintf("%s%s", mediaFormat, nameFormat)
+	return fmt.Sprintf("%s%s%s", mediaFormat, pkgFormat, nameFormat)
 }
 
 func (f *FactoryStructToSchema) makeRefString(name string) string {

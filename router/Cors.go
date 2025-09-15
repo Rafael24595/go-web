@@ -93,3 +93,22 @@ func (c *Cors) NotAllowCredentials() *Cors {
 	c.allowCredentials = false
 	return c
 }
+
+// IsEmpty returns true if the CORS configuration has no allowed
+// origins, methods, or headers defined.
+//
+// It can be used to check whether the Cors instance is unconfigured.
+func (c *Cors) IsEmpty() bool {
+	return len(c.allowedOrigins) == 0 &&
+		len(c.allowedMethods) == 0 &&
+		len(c.allowedHeaders) == 0
+}
+
+// IsNotEmpty returns true if the CORS configuration is not empty.
+// This is equivalent to !IsEmpty().
+//
+// It can be used to verify that the Cors instance has at least one
+// allowed origin, method, or header defined.
+func (c *Cors) IsNotEmpty() bool {
+	return !c.IsEmpty()
+}
