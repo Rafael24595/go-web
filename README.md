@@ -124,7 +124,7 @@ cors := router.EmptyCors().
     AllowedMethods("GET", "POST").
     AllowedHeaders("Authorization").
     AllowCredentials()
-    
+
 route := router.NewRouter().Cors(cors)
 ```
 
@@ -349,6 +349,8 @@ viewer.Load(options)
 
 route.DocViewer(viewer)
 ```
+
+If a Swagger file path is provided in the options, it will be loaded as the base OpenAPI definition. You can then override or extend it using the given options.
 
 #### No-op viewer
 
