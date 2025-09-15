@@ -2,4 +2,4 @@ version: '1.0'
 
 project:
   name: go-web
-  version: v0.2.0
+  version: v0.3.0
