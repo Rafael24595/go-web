@@ -7,15 +7,15 @@ import (
 	"strings"
 
 	"github.com/Rafael24595/go-collections/collection"
+	"github.com/Rafael24595/go-web/router/configuration"
 	"github.com/Rafael24595/go-web/router/docs"
 	"github.com/Rafael24595/go-web/router/log"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
-type Context = collection.IDictionary[string, any]
-type contextHandler = func(http.ResponseWriter, *http.Request) (Context, error)
-type requestHandler = func(http.ResponseWriter, *http.Request, Context) result.Result
-type errorHandler = func(http.ResponseWriter, *http.Request, Context, result.Result)
+type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
+type requestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
+type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
 
 const BASE = "$BASE"
@@ -447,6 +447,12 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	config := configuration.Instance()
+	if config.Dev() && config.TraceRequest() {
+		message := fmt.Sprintf("%s - %s", req.RemoteAddr, req.Pattern)
+		r.logger.Custom("DEV-REQUEST", message)
+	}
+
 	handler, ok := r.routes.Get(req.Pattern)
 	if !ok {
 		r.logger.Errors("Request handler not found")
@@ -459,28 +465,35 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 	}
 
 	result := (*handler)(wrt, req, ctx)
+	if result.Ignore() {
+		return
+	}
+
 	if result.Ok() {
-		r.manageOk(wrt, result)
+		r.manageOk(wrt, req, result)
 		return
 	}
 
 	r.manageErr(wrt, req, ctx, result)
 }
 
-func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (Context, *result.Result) {
+func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (*Context, *result.Result) {
 	contextualizer, ok := r.contextualizer.Get(req.Pattern)
 	if !ok {
 		contextualizer, ok = r.contextualizer.Get(BASE)
 	}
 
-	var context Context
-	context = collection.DictionaryEmpty[string, any]()
+	var ctx *Context
 	if ok {
 		var err error
-		context, err = (*contextualizer)(wrt, req)
+		ctx, err = (*contextualizer)(wrt, req)
 		if err != nil {
 			r.logger.Error(err)
 		}
+	}
+
+	if ctx == nil {
+		ctx = NewContext()
 	}
 
 	group := strings.Split(req.Pattern, " ")[1]
@@ -491,22 +504,22 @@ func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (
 	for _, key := range keys.Collect() {
 		funcs, ok := r.groupContextualizers.Get(key)
 		if !ok {
-			return context, nil
+			return ctx, nil
 		}
 
 		for _, f := range funcs.Collect() {
-			result := f(wrt, req, context)
+			result := f(wrt, req, ctx)
 
 			if result.Err() {
-				return context, &result
+				return ctx, &result
 			}
 		}
 	}
 
-	return context, nil
+	return ctx, nil
 }
 
-func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result) {
+func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result result.Result) {
 	encoder := result.Encoder()
 	encode, err := encoder.Encode(result.Payload())
 	if err != nil {
@@ -516,6 +529,11 @@ func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result) {
 
 	if result.Err() {
 		http.Error(wrt, string(encode), result.Status())
+		return
+	}
+
+	if result.File() {
+		http.ServeFile(wrt, req, string(encode))
 		return
 	}
 
@@ -532,7 +550,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, result result.Result) {
 	}
 }
 
-func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context Context, result result.Result) {
+func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *Context, result result.Result) {
 	errorHandler, ok := r.errors.Get(req.Pattern)
 	if !ok {
 		errorHandler, ok = r.errors.Get(BASE)
@@ -543,7 +561,7 @@ func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context C
 		return
 	}
 
-	r.manageOk(wrt, result)
+	r.manageOk(wrt, req, result)
 }
 
 func (r *Router) managePanic(wrt http.ResponseWriter, req *http.Request, rec any) {
