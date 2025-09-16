@@ -83,17 +83,17 @@ route.RouteDocumentWithOptions("GET", options, "/secure", doc)
 #### Context handler
 
 ```go
-route.Contextualizer(func(http.ResponseWriter, *http.Request) (Context, error) {
-    context := collection.DictionaryEmpty[string, any]()
-	context.Put("username", "admin")
-	return context, nil
+route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+    context := router.NewContext()
+    context.Put("username", "admin")
+    return *context, nil
 })
 ```
 
 #### Error handler
 
 ```go
-route.ErrorHandler(func(http.ResponseWriter, *http.Request, Context, result.Result) {
+route.ErrorHandler(func(http.ResponseWriter, *http.Request, router.Context, result.Result) {
     if err, ok := result.Err(); ok && err != nil {
 		http.Error(wrt, err.Error(), result.Status())
 		return
@@ -111,6 +111,53 @@ route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
     http.Error(w, message, http.StatusInternalServerError)
 })
 ```
+
+#### Context
+
+Context is a key-value store for sharing data between handlers. All values are wrapped in `Any`.
+The `Any` type holds a value of any kind and provides safe accessors to retrieve it as specific types.
+
+Any methods:
+
+- Bool() (bool, bool), Boold(def bool) bool
+- String() (string, bool), Stringd(def string) string
+- Int() (int, bool), Intd(def int) int
+- Int32() (int32, bool), Int32d(def int32) int32
+- Int64() (int64, bool), Int64d(def int64) int64
+- Float32() (float32, bool), Float32d(def float32) float32
+- Float64() (float64, bool), Float64d(def float64) float64
+- Str[T any](a Any) (T, bool), Strd[T any](a Any, def T) T (generic type cast)
+
+Usage:
+
+```go
+ctx := router.NewContext()
+
+ctx.Put("username", "admin")
+ctx.Put("userID", 123)
+
+// user == "admin"
+user := ctx.Getz("username").
+    Stringd("anonymous")
+
+// idAny == &Any{...} | ok == true
+if idAny, ok := ctx.Get("userID"); ok {
+    // id == 123 | ok == true
+    id, ok := idAny.Int()
+}
+
+ctx.Delete("username")
+```
+
+Methods include:
+
+- NewContext() *Context
+- Get(key string) (*Any, bool)
+- Getz(key string) Any
+- Put(key string, value any) *Context
+- Delete(key string) (*Any, bool)
+- Keys(key string) iter.Seq[string]
+- Values(key string) iter.Seq[Any]
 
 ---
 
@@ -224,6 +271,7 @@ func (c *CustomEncoder) Headers() map[string]string {
 - `Ok(payload)` → Successful response (`200 OK`) with plain text encoder.
 - `JsonOk(payload)` → Successful response (`200 OK`) encoded as JSON.
 - `XmlOk(payload)` → Successful response (`200 OK`) encoded as XML.
+- `FileOk(payload)` → Successful response (`200 OK`) with a file encoder.
 - `CustomOk(payload, encoder)` → Successful response (`200 OK`) with a custom encoder.
 
 ```go
@@ -238,6 +286,9 @@ return result.JsonOk(payload)
 return result.XmlOk(struct {
     Message string `xml:"message"`
 }{"Operation successful"})
+
+// File
+return result.FileOk("index.html")
 
 // Custom encoder
 return result.CustomOk("Custom response", &CustomEncoder{})
@@ -295,6 +346,19 @@ return result.Accept(202)
 
 // Reject with status 403
 return result.Reject(403)
+```
+
+#### Continue response
+
+The `Continue` result tells the router to skip automatic HTTP request resolution.  
+Use it when you want the handler to take full control of writing the response manually.
+
+```go
+w.WriteHeader(http.StatusOK)
+w.Header().Set("Content-Type", "application/xml")
+w.Write([]byte("Hello World"))
+
+return result.Continue()
 ```
 
 #### Accessors
@@ -380,6 +444,15 @@ tags := docs.DocTags("auth", "users")
 
 ---
 
+### 6. Flags
+
+The configuration is initialized from the `.env` file (or environment variables). The following keys are supported:
+
+| Variable              | Description                         | Default |
+|-----------------------|-------------------------------------|---------|
+| `GO_WEB_DEV`          | Enables or disables development mode | false   |
+| `GO_WEB_TRACE_REQUEST`| Enables or disables HTTP request tracing | false   |
+
 ## Example
 
 ```go
@@ -399,7 +472,8 @@ type DtoGreetings struct {
 }
 
 func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
-    user, _ := ctx.Get("username")
+	user := ctx.Getz("username").
+		Stringd("anonymous")
 	return result.CustomOk(fmt.Sprintf("hello %v from world", user), &CustomEncoder{})
 }
 
@@ -425,10 +499,10 @@ func main() {
     cors := router.PermissiveCors()
     route.Cors(cors)
 
-    route.Contextualizer(func(http.ResponseWriter, *http.Request) (Context, error) {
-        context := collection.DictionaryEmpty[string, any]()
+    route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+        context := router.NewContext()
         context.Put("username", "admin")
-        return context, nil
+        return *context, nil
     })
 
     route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
