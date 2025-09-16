@@ -12,7 +12,9 @@ import (
 //   - Response payload (`payload`)
 //   - Encoder (`encoder`) to format the response
 type Result struct {
+	ignore  bool
 	isOk    bool
+	isFile  bool
 	status  int
 	payload any
 	encoder ResultEncoder
@@ -21,7 +23,9 @@ type Result struct {
 // Ok returns a successful plain-text result with HTTP 200.
 func Ok(payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  http.StatusOK,
 		payload: payload,
 		encoder: NewTextEncoder(),
@@ -31,7 +35,9 @@ func Ok(payload any) Result {
 // JsonOk returns a successful JSON result with HTTP 200.
 func JsonOk(payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  http.StatusOK,
 		payload: payload,
 		encoder: NewJsonEncoder(),
@@ -41,10 +47,24 @@ func JsonOk(payload any) Result {
 // XmlOk returns a successful XML result with HTTP 200.
 func XmlOk(payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  http.StatusOK,
 		payload: payload,
 		encoder: NewXmlEncoder(),
+	}
+}
+
+// FileOk returns a successful File result with HTTP 200.
+func FileOk(payload any) Result {
+	return Result{
+		ignore:  false,
+		isOk:    true,
+		isFile:  true,
+		status:  http.StatusOK,
+		payload: payload,
+		encoder: NewTextEncoder(),
 	}
 }
 
@@ -52,7 +72,9 @@ func XmlOk(payload any) Result {
 // using a custom encoder.
 func CustomOk(payload any, encoder ResultEncoder) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  http.StatusOK,
 		payload: payload,
 		encoder: encoder,
@@ -63,7 +85,9 @@ func CustomOk(payload any, encoder ResultEncoder) Result {
 // with a custom HTTP status.
 func Oks(status int, payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: NewTextEncoder(),
@@ -74,7 +98,9 @@ func Oks(status int, payload any) Result {
 // with a custom HTTP status.
 func JsonOks(status int, payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: NewJsonEncoder(),
@@ -85,7 +111,9 @@ func JsonOks(status int, payload any) Result {
 // with a custom HTTP status.
 func XmlOks(status int, payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: NewXmlEncoder(),
@@ -96,7 +124,9 @@ func XmlOks(status int, payload any) Result {
 // with a custom HTTP status and encoder.
 func CustomOks(status int, payload any, encoder ResultEncoder) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: encoder,
@@ -111,7 +141,9 @@ func Err(status int, err error) Result {
 	}
 
 	return Result{
+		ignore:  false,
 		isOk:    false,
+		isFile:  false,
 		status:  status,
 		payload: message,
 		encoder: NewTextEncoder(),
@@ -121,7 +153,9 @@ func Err(status int, err error) Result {
 // JsonErr returns an error response encoded as JSON.
 func JsonErr(status int, payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: NewJsonEncoder(),
@@ -131,7 +165,9 @@ func JsonErr(status int, payload any) Result {
 // XmlErr returns an error response encoded as XML.
 func XmlErr(status int, payload any) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
+		isFile:  false,
 		status:  status,
 		payload: payload,
 		encoder: NewXmlEncoder(),
@@ -141,10 +177,23 @@ func XmlErr(status int, payload any) Result {
 // CustomErr returns an error response with a custom encoder.
 func CustomErr(status int, payload any, encoder ResultEncoder) Result {
 	return Result{
+		ignore:  false,
 		isOk:    true,
 		status:  status,
 		payload: payload,
 		encoder: encoder,
+	}
+}
+
+// Continue returns a Result that tells the Router to ignore automatic HTTP request resolution.
+// This allows the handler to take full control of writing the response manually.
+func Continue() Result {
+	return Result{
+		ignore:  true,
+		isOk:    false,
+		status:  0,
+		payload: "",
+		encoder: NewTextEncoder(),
 	}
 }
 
@@ -173,6 +222,11 @@ func (r Result) Payload() any {
 	return r.payload
 }
 
+// Ignore reports whether the Result is marked to bypass the Router's automatic request handling.
+func (r Result) Ignore() bool {
+	return r.ignore
+}
+
 // Ok returns true if the result represents a successful operation.
 func (r Result) Ok() bool {
 	return r.isOk
@@ -181,4 +235,9 @@ func (r Result) Ok() bool {
 // Err returns true if the result represents a failure.
 func (r Result) Err() bool {
 	return !r.isOk
+}
+
+// File returns true if the result represents a file.
+func (r Result) File() bool {
+	return r.isFile
 }
