@@ -1,5 +1,14 @@
 package swagger
 
+type AllOf []AllOfAttributes
+type AllOfAttributes map[AllOfFields]any
+
+type AllOfFields string
+
+const (
+	ALL_OF_REF AllOfFields = "$ref"
+)
+
 type OpenAPI3 struct {
 	OpenAPI      string              `json:"openapi" yaml:"openapi"`
 	Info         Info                `json:"info" yaml:"info"`
@@ -145,7 +154,18 @@ type Schema struct {
 	Enum                 []interface{}      `json:"enum,omitempty" yaml:"enum,omitempty"`
 	Description          string             `json:"description,omitempty" yaml:"description,omitempty"`
 	AdditionalProperties *Schema            `json:"additionalProperties,omitempty" yaml:"additionalProperties,omitempty"`
+	AllOf                AllOf              `json:"allOf,omitempty" yaml:"allOf,omitempty"`
 	XML                  *XML               `json:"xml,omitempty" yaml:"xml,omitempty"`
+}
+
+func MakeAllOf(attributes AllOfAttributes) AllOf {
+	allOf := make(AllOf, 0)
+
+	for k, v := range attributes {
+		allOf = append(allOf, AllOfAttributes{k: v})
+	}
+
+	return allOf
 }
 
 func NewSchema() *Schema {
