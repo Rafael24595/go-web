@@ -52,22 +52,7 @@ func (f *FactoryStructToSchema) MakeSchema(media docs.MediaType, root any) (*Sch
 		t = t.Elem()
 	}
 
-	ref, isVector, err := f.collectSchema(media, t)
-	if err != nil {
-		return nil, err
-	}
-
-	if isVector {
-		return &Schema{
-			Items: &Schema{
-				Ref: ref,
-			},
-		}, nil
-	}
-
-	return &Schema{
-		Ref: ref,
-	}, nil
+	return f.inferStruct(media, t)
 }
 
 func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Type) (string, bool, error) {
@@ -99,7 +84,7 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 
 	if schema != nil && media == docs.XML {
 		schema.XML = &XML{
-			Name: name,
+			Name:    name,
 			Wrapped: true,
 		}
 	}
@@ -201,18 +186,24 @@ func (f *FactoryStructToSchema) isJsonField(field reflect.StructField, ref *Sche
 func (f *FactoryStructToSchema) isXmlField(field reflect.StructField, ref *Schema) (string, bool, *Schema) {
 	attribute := field.Tag.Get("xml")
 
+	wrapper := ""
 	tag := strings.Split(attribute, ",")[0]
 	if tag == "" || tag == "-" {
 		return "", false, nil
 	}
 
-	wrapper := ""
 	if fragments := strings.Split(tag, ">"); len(fragments) > 1 {
-		tag = fragments[0]
-		wrapper = fragments[1]
+		tag = strings.TrimSpace(fragments[0])
+		wrapper = strings.TrimSpace(fragments[1])
 	}
 
 	if wrapper != "" {
+		if ref.Items != nil {
+			ref.Items = f.defineXmlName(wrapper, ref.Items, false)
+		} else {
+			ref = f.defineXmlName(wrapper, ref, false)
+		}
+
 		ref = &Schema{
 			Type: "object",
 			Properties: map[string]*Schema{
@@ -222,13 +213,28 @@ func (f *FactoryStructToSchema) isXmlField(field reflect.StructField, ref *Schem
 	}
 
 	attr := strings.Contains(attribute, "attr")
-	ref.XML = &XML{
-		Name:      tag,
-		Attribute: attr,
-	}
+	ref = f.defineXmlName(tag, ref, attr)
 
 	omitEmpty := strings.Contains(attribute, "omitempty")
 	return tag, omitEmpty, ref
+}
+
+func (f *FactoryStructToSchema) defineXmlName(name string, ref *Schema, attribute bool) *Schema {
+	if ref.Ref != "" {
+		refVal := ref.Ref
+		ref.Ref = ""
+
+		ref.AllOf = MakeAllOf(AllOfAttributes{
+			ALL_OF_REF: refVal,
+		})
+	}
+
+	ref.XML = &XML{
+		Name:      name,
+		Attribute: attribute,
+	}
+
+	return ref
 }
 
 func (f *FactoryStructToSchema) canBeRequired(field reflect.StructField) bool {
