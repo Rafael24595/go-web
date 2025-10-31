@@ -190,6 +190,23 @@ route := router.NewRouter().Cors(cors)
 
 The framework provides built-in helper functions for deserializing request bodies into Go structs. These functions simplify handling JSON and XML payloads inside route handlers.
 
+#### Text Input
+
+Reads the entire request body as raw bytes.
+- On success: returns the raw bytes and nil.
+- On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
+
+```go
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    bytes, res := router.InputText(r)
+    if res != nil {
+        return *res
+    }
+
+    return result.Ok(string(bytes))
+}
+```
+
 #### JSON Input
 
 Parses the request body as JSON into a value of type T.

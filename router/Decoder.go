@@ -11,6 +11,32 @@ import (
 	"golang.org/x/net/html/charset"
 )
 
+// InputText reads the entire request body as raw bytes.
+//
+// If reading the body is successful, it returns the content as a byte slice
+// and a nil result. If an error occurs while reading the body, it returns
+// an empty byte slice and a non-nil *result.Result with status
+// 400 Bad Request.
+//
+// Example:
+//
+//	func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+//	    data, res := router.InputText(r)
+//	    if res != nil {
+//	        return *res
+//	    }
+//	    return result.BytesOk(data)
+//	}
+func InputText(r *http.Request) ([]byte, *result.Result) {
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		result := result.Err(http.StatusBadRequest, err)
+		return make([]byte, 0), &result
+	}
+
+	return bodyBytes, nil
+}
+
 // InputJson parses the request body as JSON into a value of type T.
 //
 // If decoding is successful, it returns the payload and a nil result.
