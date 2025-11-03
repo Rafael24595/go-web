@@ -32,6 +32,18 @@ func Ok(payload any) Result {
 	}
 }
 
+// TextOk returns a successful text result with HTTP 200.
+func TextOk(message string) Result {
+	return Result{
+		ignore:  false,
+		isOk:    true,
+		isFile:  false,
+		status:  http.StatusOK,
+		payload: message,
+		encoder: NewTextEncoder(),
+	}
+}
+
 // JsonOk returns a successful JSON result with HTTP 200.
 func JsonOk(payload any) Result {
 	return Result{
@@ -149,6 +161,19 @@ func Err(status int, err error) Result {
 		encoder: NewTextEncoder(),
 	}
 }
+
+// Err returns a text error result with a given HTTP status.
+func TextErr(status int, message string) Result {
+	return Result{
+		ignore:  false,
+		isOk:    false,
+		isFile:  false,
+		status:  status,
+		payload: message,
+		encoder: NewTextEncoder(),
+	}
+}
+
 
 // JsonErr returns an error response encoded as JSON.
 func JsonErr(status int, payload any) Result {
