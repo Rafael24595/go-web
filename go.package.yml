@@ -1,5 +1,6 @@
-version: '1.0'
+version: '1.1'
 
 project:
   name: go-web
   version: v0.6.2
+  description: Lightweight and extensible Go web framework
