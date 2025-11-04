@@ -215,7 +215,7 @@ func CustomErr(status int, payload any, encoder ResultEncoder) Result {
 func Continue() Result {
 	return Result{
 		ignore:  true,
-		isOk:    false,
+		isOk:    true,
 		status:  0,
 		payload: "",
 		encoder: NewTextEncoder(),
@@ -254,12 +254,12 @@ func (r Result) Ignore() bool {
 
 // Ok returns true if the result represents a successful operation.
 func (r Result) Ok() bool {
-	return r.isOk
+	return r.isOk && !r.ignore
 }
 
 // Err returns true if the result represents a failure.
 func (r Result) Err() bool {
-	return !r.isOk
+	return !r.isOk && !r.ignore
 }
 
 // File returns true if the result represents a file.
