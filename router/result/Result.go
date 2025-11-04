@@ -222,6 +222,17 @@ func Continue() Result {
 	}
 }
 
+// Ok returns a successful result with HTTP 200.
+func Next() Result {
+	return Result{
+		ignore:  false,
+		isOk:    true,
+		status:  http.StatusOK,
+		payload: "",
+		encoder: NewTextEncoder(),
+	}
+}
+
 // Accept returns a success result with the given status and no payload.
 func Accept(status int) Result {
 	return Oks(status, nil)
