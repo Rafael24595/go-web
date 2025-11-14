@@ -1,7 +1,7 @@
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
-github.com/Rafael24595/go-collections v0.3.0 h1:sKa5C29O/cFzBtik98DpvFNrmw8J4kdklXpBkNJanU4=
-github.com/Rafael24595/go-collections v0.3.0/go.mod h1:X9aAFvQP7Plo+Czy49reqNZSikoo0jggEG88dyhzAoE=
+github.com/Rafael24595/go-collections v0.4.0 h1:Afhd3VUtSuEKJZ3pjp/AIR+DKibgFITtwQNA8ZLMzSw=
+github.com/Rafael24595/go-collections v0.4.0/go.mod h1:X9aAFvQP7Plo+Czy49reqNZSikoo0jggEG88dyhzAoE=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-openapi/jsonpointer v0.22.1 h1:sHYI1He3b9NqJ4wXLoJDKmUmHkWy/L7rtEo92JUxBNk=

@@ -2,6 +2,8 @@ package result
 
 import (
 	"net/http"
+
+	"github.com/Rafael24595/go-collections/collection"
 )
 
 // Result represents the outcome of a route handler execution.
@@ -146,11 +148,10 @@ func CustomOks(status int, payload any, encoder ResultEncoder) Result {
 }
 
 // Err returns a plain-text error result with a given HTTP status.
-func Err(status int, err error) Result {
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
+func Err(status int, err ...error) Result {
+	message := collection.MapToVector(err, func(e error) string {
+		return e.Error()
+	}).Join("/n")
 
 	return Result{
 		ignore:  false,
