@@ -137,7 +137,7 @@ func (v *OpenAPI3Viewer) groupCookies(group string, cookies map[string]string) d
 	return v
 }
 
-func (v *OpenAPI3Viewer) groupResponses(group string, responses map[string]docs.DocPayload) docs.IDocViewer {
+func (v *OpenAPI3Viewer) groupResponses(group string, responses map[docs.StatusCode]docs.DocPayload) docs.IDocViewer {
 	item, ok := v.responses[group]
 	if !ok {
 		item = make(map[string]Response)
@@ -370,7 +370,7 @@ func (v *OpenAPI3Viewer) makeResponses(path string, route docs.DocOperation) map
 	return result
 }
 
-func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[string]docs.DocPayload) map[string]Response {
+func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs.DocPayload) map[string]Response {
 	if len(responses) == 0 {
 		return make(map[string]Response)
 	}
@@ -382,7 +382,7 @@ func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[string]docs.DocPaylo
 			v.logger.Error(err)
 			return nil
 		}
-		result[status] = Response{
+		result[string(status)] = Response{
 			Description: response.Description,
 			Content: map[string]MediaType{
 				string(response.MediaType): {

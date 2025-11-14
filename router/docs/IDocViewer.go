@@ -8,7 +8,7 @@ import (
 type handler = func(http.ResponseWriter, *http.Request)
 
 // DocResponses maps HTTP status codes or response identifiers to DocPayloads.
-type DocResponses map[string]DocPayload
+type DocResponses map[StatusCode]DocPayload
 // DocParameters maps parameter names to their description.
 type DocParameters map[string]string
 
