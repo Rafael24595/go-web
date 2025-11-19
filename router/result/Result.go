@@ -241,7 +241,7 @@ func Accept(status int) Result {
 
 // Reject returns a plain-text error with the given status and no message.
 func Reject(status int) Result {
-	return Err(status, nil)
+	return Err(status)
 }
 
 // Status returns the HTTP status code associated with the Result.
