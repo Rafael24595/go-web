@@ -278,8 +278,8 @@ func (r *Router) RouteDocument(method string, handler requestHandler, pattern st
 // Returns the Router itself for fluent configuration.
 func (r *Router) RouteDocumentWithOptions(method string, options *HandlerOptions, pattern string, doc docs.DocRoute) *Router {
 	params := make([]any, 0)
-	for p := range doc.Parameters {
-		params = append(params, p)
+	for _, p := range doc.Parameters {
+		params = append(params, p.Code)
 	}
 
 	docRoute := docs.DocOperation{
