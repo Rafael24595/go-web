@@ -9,8 +9,21 @@ type handler = func(http.ResponseWriter, *http.Request)
 
 // DocResponses maps HTTP status codes or response identifiers to DocPayloads.
 type DocResponses map[StatusCode]DocPayload
+
 // DocParameters maps parameter names to their description.
 type DocParameters map[string]string
+
+// DocOrderParameters maps parameter names to their order and description.
+type DocOrderParameters []DocParameter
+
+type DocParameter struct {
+	Code        string `json:"code"`
+	Description string `json:"description"`
+}
+
+func Parameter(code string, description string) DocParameter {
+	return DocParameter{code, description}
+}
 
 // ParameterType defines the location type of a request parameter.
 type ParameterType string
@@ -64,7 +77,7 @@ type DocGroup struct {
 // DocRoute represents the documentation for a single route.
 type DocRoute struct {
 	Description string
-	Parameters  DocParameters
+	Parameters  DocOrderParameters
 	Query       DocParameters
 	Files       DocParameters
 	Cookies     DocParameters
@@ -79,7 +92,7 @@ type DocOperation struct {
 	Method      string
 	BasePath    string
 	Path        string
-	Parameters  DocParameters
+	Parameters  DocOrderParameters
 	Query       DocParameters
 	Files       DocParameters
 	Cookies     DocParameters

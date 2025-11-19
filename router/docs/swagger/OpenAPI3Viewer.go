@@ -261,8 +261,8 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 	}
 
 	if route.Parameters != nil {
-		for n, d := range route.Parameters {
-			parameters = append(parameters, v.makeParameter(n, d, "path"))
+		for _, d := range route.Parameters {
+			parameters = append(parameters, v.makeParameter(d.Code, d.Description, "path"))
 		}
 	}
 
