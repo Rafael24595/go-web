@@ -149,7 +149,10 @@ func CustomOks(status int, payload any, encoder ResultEncoder) Result {
 
 // Err returns a plain-text error result with a given HTTP status.
 func Err(status int, err ...error) Result {
-	message := collection.MapToVector(err, func(e error) string {
+	raw := collection.VectorFromList(err)
+	raw.FilterSelf(func(err error) bool { return err != nil })
+	
+	message := collection.VectorMap(raw, func(e error) string {
 		return e.Error()
 	}).Join("/n")
 
