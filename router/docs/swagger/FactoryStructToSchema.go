@@ -365,6 +365,7 @@ func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, pkg, name st
 	nameFormat := name
 	if media != "" {
 		caser := cases.Title(language.Und, cases.NoLower)
+		
 		mediaFormat = caser.String(mediaFormat)
 		pkgFormat = caser.String(pkgFormat)
 		nameFormat = caser.String(nameFormat)
