@@ -29,7 +29,7 @@ func (e *jsonEncoder) Encode(payload any) ([]byte, error) {
 	if payload == nil {
 		return make([]byte, 0), nil
 	}
-	
+
 	payloadJson, err := json.MarshalIndent(payload, "", " ")
 	if err != nil {
 		message := fmt.Sprintf("Error marshalling entity to JSON: %s", err.Error())
@@ -89,7 +89,9 @@ func (e *textEncoder) Encode(payload any) ([]byte, error) {
 	}
 
 	t := reflect.TypeOf(payload)
-	switch  t.Kind() {
+	switch t.Kind() {
+	case reflect.String:
+		return []byte(payload.(string)), nil
 	case reflect.Ptr, reflect.Struct, reflect.Map, reflect.Array, reflect.Slice:
 		return NewJsonEncoder().Encode(payload)
 	default:
