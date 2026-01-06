@@ -26,13 +26,13 @@ go get github.com/Rafael24595/go-web
 
 The `Router` is the central component that manages route registration, handlers, CORS, and documentation.
 
-#### Basic route
+#### 1.1 Basic route
 
 ```go
 route.Route("GET", handler, "/hello")
 ```
 
-#### With parameters
+#### 1.2 With parameters
 
 ```go
 const PLACE = "place"
@@ -40,7 +40,7 @@ const PLACE = "place"
 route.Route("GET", handler, "/hello/{%s}", PLACE)
 ```
 
-#### With options
+#### 1.3 With options
 
 ```go
 options := router.NewHandlerOptions(handler).
@@ -51,17 +51,16 @@ options := router.NewHandlerOptions(handler).
 route.RouteWithOptions("GET", options, "/secure")
 ```
 
-#### With documentation
+#### 1.4 With documentation
 
 ```go
-
 const PLACE_DESC = "Place description"
 const TEAPOT_DESC = "I'm a teapot"
 
 doc := docs.DocRoute{
 	Description: "description",
-	Parameters: docs.DocParameters{
-		PLACE: PLACE_DESC,
+    Parameters: docs.DocOrderParameters{
+		docs.Parameter(PLACE, PLACE_DESC),
 	},
 	Request: docs.DocJsonPayload[DtoPlace](),
 	Responses: docs.DocResponses{
@@ -73,14 +72,13 @@ doc := docs.DocRoute{
 route.RouteDocument("GET", handler, "/hello/{%s}", doc)
 ```
 
-#### With documentation and options
+#### 1.5 With documentation and options
 
 ```go
-
 route.RouteDocumentWithOptions("GET", options, "/secure", doc)
 ```
 
-#### Context handler
+#### 1.6 Context handler
 
 ```go
 route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
@@ -90,7 +88,7 @@ route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, e
 })
 ```
 
-#### Error handler
+#### 1.7 Error handler
 
 ```go
 route.ErrorHandler(func(http.ResponseWriter, *http.Request, router.Context, result.Result) {
@@ -103,7 +101,7 @@ route.ErrorHandler(func(http.ResponseWriter, *http.Request, router.Context, resu
 })
 ```
 
-#### Panic handler
+#### 1.8 Panic handler
 
 ```go
 route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
@@ -112,7 +110,7 @@ route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
 })
 ```
 
-#### Context
+#### 1.9 Context
 
 Context is a key-value store for sharing data between handlers. All values are wrapped in `Any`.
 The `Any` type holds a value of any kind and provides safe accessors to retrieve it as specific types.
@@ -175,7 +173,7 @@ cors := router.EmptyCors().
 route := router.NewRouter().Cors(cors)
 ```
 
-#### Permissive CORS
+#### 2.1 Permissive CORS
 
 Allows all origins, methods, and headers:
 
@@ -186,11 +184,13 @@ route := router.NewRouter().Cors(cors)
 
 ---
 
-### 3 .Input Deserializers
+### 3. Input Deserializers
 
 The framework provides built-in helper functions for deserializing request bodies into Go structs. These functions simplify handling JSON and XML payloads inside route handlers.
 
-#### Text Input
+> **Note:** This methods always close the request body, ensuring proper resource management.
+
+#### 3.1 Bytes Input
 
 Reads the entire request body as raw bytes.
 - On success: returns the raw bytes and nil.
@@ -198,16 +198,33 @@ Reads the entire request body as raw bytes.
 
 ```go
 func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
-    bytes, res := router.InputText(r)
+    bytes, res := router.InputBytes(r)
     if res != nil {
         return *res
     }
 
-    return result.Ok(string(bytes))
+    return result.BytesOk(bytes)
 }
 ```
 
-#### JSON Input
+#### 3.2 Text Input
+
+Reads the entire request body as string.
+- On success: returns the raw bytes and nil.
+- On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
+
+```go
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    text, res := router.InputText(r)
+    if res != nil {
+        return *res
+    }
+
+    return result.TextOk(bytes)
+}
+```
+
+#### 3.3 JSON Input
 
 Parses the request body as JSON into a value of type T.
 - On success: returns the parsed payload and nil.
@@ -231,7 +248,7 @@ func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.
 }
 ```
 
-#### XML Input
+#### 3.4 XML Input
 
 Parses the request body as XML into a value of type T. The decoder supports multiple character sets via golang.org/x/net/html/charset.
 - On success: returns the parsed payload and nil.
@@ -254,11 +271,28 @@ func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.
 }
 ```
 
+#### 3.5 Input With Options (WithOpts)
+
+All input types have a WithOpts variant that allows you to control:
+- Limit: maximum number of bytes to read (0 = unlimited).
+- Strict: whether to return an error if the limit is exceeded.
+
+```go
+func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+    opts := router.InputOpts{Limit: 1 << 20, Strict: true} // 1 MB strict limit
+    data, res := router.InputBytesWithOpts(w, r, opts)
+    if res != nil {
+        return *res
+    }
+    return result.BytesOk(data)
+}
+```
+
 ### 4. Result Handling
 
 The `Result` type standardizes how responses are returned from route handlers.
 
-#### Custom Encoders
+#### 4.1 Custom Encoders
 
 You can create your own response format by implementing the `ResultEncoder` interface. This allows full control over how the payload is serialized and which headers are returned.
 
@@ -284,16 +318,20 @@ func (c *CustomEncoder) Headers() map[string]string {
 }
 ```
 
-#### Success Responses (200 OK by default)
-- `Ok(payload)` → Successful response (`200 OK`) with plain text encoder.
+#### 4.2 Success Responses (200 OK by default)
+- `Ok(payload)` → Successful response (`200 OK`) from any with plain text encoder.
+- `TextOk(string)` → Successful response (`200 OK`) from string with plain text encoder.
 - `JsonOk(payload)` → Successful response (`200 OK`) encoded as JSON.
 - `XmlOk(payload)` → Successful response (`200 OK`) encoded as XML.
 - `FileOk(payload)` → Successful response (`200 OK`) with a file encoder.
 - `CustomOk(payload, encoder)` → Successful response (`200 OK`) with a custom encoder.
 
 ```go
-// Plain text
-return result.Ok("Operation successful")
+// Plain text from any
+return result.Ok([]string{"Operation successful"})
+
+// Plain text from string
+return result.TextOk("Operation successful")
 
 // JSON
 payload := map[string]string{"message": "Operation successful"}
@@ -311,7 +349,7 @@ return result.FileOk("index.html")
 return result.CustomOk("Custom response", &CustomEncoder{})
 ```
 
-#### Success Responses with Custom HTTP Status
+#### 4.3 Success Responses with Custom HTTP Status
 - `Oks(status, payload)` → Successful response with a custom HTTP status code and plain text encoder.
 - `JsonOks(status, payload)` → Successful response with a custom HTTP status code, encoded as JSON.
 - `XmlOks(status, payload)` → Successful response with a custom HTTP status code, encoded as XML.
@@ -331,15 +369,19 @@ return result.XmlOks(204, struct{}{})
 return result.CustomOks(200, myPayload, &CustomEncoder{})
 ```
 
-#### Error Responses
+#### 4.4 Error Responses
 - `Err(status, error)` → Error response with a specific HTTP status code and error message, plain text by default.
+- `TextErr(status, string)` → Error response with a specific HTTP status code and message, plain text by default.
 - `JsonErr(status, payload)` → Error response with a specific HTTP status code, encoded as JSON.
 - `XmlErr(status, payload)` → Error response with a specific HTTP status code, encoded as XML.
 - `CustomErr(status, payload, encoder)` → Error response with a specific HTTP status code and a custom encoder.
 
 ```go
-// Plain text error
+// Plain text from error
 return result.Err(400, errors.New("Bad request"))
+
+// Plain text from string
+return result.TextErr(400, "Bad request")
 
 // JSON error
 return result.JsonErr(404, map[string]string{"error": "Not found"})
@@ -353,7 +395,7 @@ return result.XmlErr(500, struct {
 return result.CustomErr(403, "Forbidden", &CustomEncoder{})
 ```
 
-#### Responses without payload
+#### 4.5 Responses without payload
 - `Accept(status)` → Accept response with no payload (success) and custom HTTP status code.
 - `Reject(status)` → Reject response with no payload (failure) and custom HTTP status code.
 
@@ -365,7 +407,7 @@ return result.Accept(202)
 return result.Reject(403)
 ```
 
-#### Continue response
+#### 4.6 Continue response
 
 The `Continue` result tells the router to skip automatic HTTP request resolution.  
 Use it when you want the handler to take full control of writing the response manually.
@@ -378,7 +420,19 @@ w.Write([]byte("Hello World"))
 return result.Continue()
 ```
 
-#### Accessors
+#### 4.7 Next response
+
+The `Next` is usually used in the request handlers to tell the router that the proccess can continue the execution, it's basically an Ok response without defined payload.
+
+```go
+if user.IsAdmin() {
+	return result.Next()
+}
+
+return result.Err(http.StatusUnauthorized)
+```
+
+#### 4.8 Accessors
 
 - `Status()` → Returns the HTTP status code associated with the `Result`.
 - `Encoder()` → Returns the `ResultEncoder` used to serialize the payload.
@@ -392,7 +446,7 @@ return result.Continue()
 
 The `docs` package models routes, payloads, parameters, and responses for generating documentation.
 
-#### Viewer
+#### 5.1 Viewer
 
 **IDocViewer** provides an interface for implementing documentation viewers that will expose the project routing documentation.
 
@@ -408,7 +462,7 @@ type IDocViewer interface {
 }
 ```
 
-#### Swagger Viewer
+#### 5.2 Swagger Viewer
 
 The `swagger` package provides an implementation of IDocViewer for OpenAPI 3.0.
 
@@ -433,7 +487,7 @@ route.DocViewer(viewer)
 
 If a Swagger file path is provided in the options, it will be loaded as the base OpenAPI definition. You can then override or extend it using the given options.
 
-#### No-op viewer
+#### 5.3 No-op viewer
 
 If you don’t want documentation, the no-op viewer is used by default:
 
@@ -445,7 +499,7 @@ route.DocViewer(viewer)
 
 ---
 
-#### Payloads
+#### 5.4 Payloads
 
 ```go
 payload := docs.DocJsonPayload[Example]("Example JSON response")
@@ -453,7 +507,7 @@ payload := docs.DocXmlPayload[Example]("Example XML response")
 payload := docs.DocText("Plain text response")
 ```
 
-#### Tags
+#### 5.5 Tags
 
 ```go
 tags := docs.DocTags("auth", "users")
