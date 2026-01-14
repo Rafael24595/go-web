@@ -187,7 +187,7 @@ func (r *Router) GroupContextualizer(handler requestHandler, group ...string) *R
 		result, _ := r.groupContextualizers.
 			PutIfAbsent(v, *collection.VectorEmpty[requestHandler]())
 		result.Append(handler)
-		r.groupContextualizers.Put(v, *result)
+		r.groupContextualizers.Put(v, result)
 	}
 	return r
 }
@@ -206,7 +206,7 @@ func (r *Router) GroupContextualizerDocument(handler requestHandler, doc docs.Do
 			PutIfAbsent(v, *collection.VectorEmpty[requestHandler]())
 		result.Append(handler)
 		path := fmt.Sprintf("%s%s", r.basePath, v)
-		r.groupContextualizers.Put(path, *result)
+		r.groupContextualizers.Put(path, result)
 		r.docViewer.RegisterGroup(path, doc)
 	}
 	return r
@@ -464,7 +464,7 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	result := (*handler)(wrt, req, ctx)
+	result := handler(wrt, req, ctx)
 	if result.Ignore() {
 		return
 	}
@@ -486,7 +486,7 @@ func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (
 	var ctx *Context
 	if ok {
 		var err error
-		ctx, err = (*contextualizer)(wrt, req)
+		ctx, err = contextualizer(wrt, req)
 		if err != nil {
 			r.logger.Error(err)
 		}
@@ -557,7 +557,7 @@ func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *
 	}
 
 	if ok {
-		(*errorHandler)(wrt, req, context, result)
+		errorHandler(wrt, req, context, result)
 		return
 	}
 
@@ -571,7 +571,7 @@ func (r *Router) managePanic(wrt http.ResponseWriter, req *http.Request, rec any
 	}
 
 	if ok {
-		(*panicHandler)(wrt, req, rec)
+		panicHandler(wrt, req, rec)
 		return
 	}
 
