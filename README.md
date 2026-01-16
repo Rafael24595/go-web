@@ -157,6 +157,82 @@ Methods include:
 - Keys(key string) iter.Seq[string]
 - Values(key string) iter.Seq[Any]
 
+#### 1.10 Handler composition
+
+Handlers can be composed to build more complex request processing flows while keeping each handler focused on a single responsibility.
+
+The router provides helper functions to combine multiple RequestHandler instances into a single handler with well-defined execution semantics.
+
+#### 1.10.1 Fallback handlers
+
+FallbackHandlers executes handlers sequentially until one of them succeeds.
+
+- Handlers are evaluated in order
+- Execution stops at the first handler that returns Ok
+- If no handler succeeds, the last result is returned
+
+This is useful for implementing fallback or alternative strategies, such as multiple authentication mechanisms.
+
+```go
+laxAuth := router.FallbackHandlers(
+    authToken,
+    authCookie,
+)
+
+route.GroupContextualizer(laxAuth, "user")
+```
+
+Typical use cases:
+
+- Authentication fallback (token → cookie)
+- Multiple resolvers for the same resource
+- Optional features controlled by configuration
+
+#### 1.10.2 Validation handlers
+
+ValidateHandlers executes all handlers sequentially and fails fast on the first error.
+
+- Handlers are evaluated in order
+- Execution stops at the first handler that returns an error
+- If all handlers succeed, the result is Ok
+
+This is useful when all conditions must be satisfied before continuing.
+
+```go
+strictAuth := router.ValidateHandlers(
+    laxAuth,
+    requireVerifiedUser,
+)
+
+route.
+    GroupContextualizer(strictAuth, "admin")
+```
+
+
+Typical use cases:
+
+- Request validation pipelines
+- Authorization and permission checks
+- Precondition enforcement
+
+#### 1.10.3 Combining strategies
+
+Both composition strategies can be combined to express complex flows in a declarative way:
+
+```go
+laxAuth := router.FallbackHandlers(
+    authToken,
+    authCookie,
+)
+
+strictAuth := router.ValidateHandlers(
+    laxAuth,
+    requireVerifiedSession,
+)
+```
+
+This approach keeps handlers simple and moves orchestration logic to the router configuration.
+
 ---
 
 ### 2. CORS
@@ -287,6 +363,7 @@ func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.
     return result.BytesOk(data)
 }
 ```
+---
 
 ### 4. Result Handling
 

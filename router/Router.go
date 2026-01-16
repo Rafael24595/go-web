@@ -14,7 +14,7 @@ import (
 )
 
 type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
-type requestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
+type RequestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
 type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
 
@@ -30,7 +30,7 @@ const BASE = "$BASE"
 // Use NewHandlerOptions to create a new instance, and the builder-style
 // methods (Context, Error, Panic) to configure it.
 type HandlerOptions struct {
-	handler requestHandler
+	handler RequestHandler
 	context *contextHandler
 	error   *errorHandler
 	panic   *panicHandler
@@ -38,7 +38,7 @@ type HandlerOptions struct {
 
 // NewHandlerOptions creates a new HandlerOptions instance for the given
 // route handler. By default, no context, error, or panic handlers are set.
-func NewHandlerOptions(handler requestHandler) *HandlerOptions {
+func NewHandlerOptions(handler RequestHandler) *HandlerOptions {
 	return &HandlerOptions{
 		handler: handler,
 	}
@@ -79,10 +79,10 @@ func (h *HandlerOptions) Panic(panic *panicHandler) *HandlerOptions {
 type Router struct {
 	logger               log.Log
 	contextualizer       collection.IDictionary[string, contextHandler]
-	groupContextualizers collection.IDictionary[string, collection.Vector[requestHandler]]
+	groupContextualizers collection.IDictionary[string, collection.Vector[RequestHandler]]
 	errors               collection.IDictionary[string, errorHandler]
 	panics               collection.IDictionary[string, panicHandler]
-	routes               collection.IDictionary[string, requestHandler]
+	routes               collection.IDictionary[string, RequestHandler]
 	basePath             string
 	cors                 *Cors
 	docViewer            docs.IDocViewer
@@ -102,9 +102,9 @@ func NewRouter() *Router {
 	return &Router{
 		logger:               log.DefaultLogger(),
 		contextualizer:       collection.DictionaryEmpty[string, contextHandler](),
-		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[requestHandler]](),
+		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[RequestHandler]](),
 		errors:               collection.DictionaryEmpty[string, errorHandler](),
-		routes:               collection.DictionaryEmpty[string, requestHandler](),
+		routes:               collection.DictionaryEmpty[string, RequestHandler](),
 		basePath:             "",
 		cors:                 EmptyCors(),
 		docViewer:            docs.VoidViewer(),
@@ -182,10 +182,10 @@ func (r *Router) Contextualizer(handler contextHandler) *Router {
 // specified group.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) GroupContextualizer(handler requestHandler, group ...string) *Router {
+func (r *Router) GroupContextualizer(handler RequestHandler, group ...string) *Router {
 	for _, v := range group {
 		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[requestHandler]())
+			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
 		result.Append(handler)
 		r.groupContextualizers.Put(v, result)
 	}
@@ -200,10 +200,10 @@ func (r *Router) GroupContextualizer(handler requestHandler, group ...string) *R
 // documenting the group in the API viewer.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) GroupContextualizerDocument(handler requestHandler, doc docs.DocGroup, group ...string) *Router {
+func (r *Router) GroupContextualizerDocument(handler RequestHandler, doc docs.DocGroup, group ...string) *Router {
 	for _, v := range group {
 		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[requestHandler]())
+			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
 		result.Append(handler)
 		path := fmt.Sprintf("%s%s", r.basePath, v)
 		r.groupContextualizers.Put(path, result)
@@ -244,7 +244,7 @@ func (r *Router) PanicHandler(handler panicHandler) *Router {
 // Use this when you don’t need documentation or advanced configuration.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) Route(method string, handler requestHandler, pattern string, params ...any) *Router {
+func (r *Router) Route(method string, handler RequestHandler, pattern string, params ...any) *Router {
 	return r.RouteWithOptions(method, NewHandlerOptions(handler), pattern, params...)
 }
 
@@ -265,7 +265,7 @@ func (r *Router) RouteWithOptions(method string, options *HandlerOptions, patter
 // handlers.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) RouteDocument(method string, handler requestHandler, pattern string, doc docs.DocRoute) *Router {
+func (r *Router) RouteDocument(method string, handler RequestHandler, pattern string, doc docs.DocRoute) *Router {
 	return r.RouteDocumentWithOptions(method, NewHandlerOptions(handler), pattern, doc)
 }
 
