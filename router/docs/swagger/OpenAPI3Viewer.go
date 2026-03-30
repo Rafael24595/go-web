@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/Rafael24595/go-web/router/docs"
-	"github.com/Rafael24595/go-web/router/log"
+	"github.com/Rafael24595/go-log/log"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
 	"gopkg.in/yaml.v3"
 )
@@ -47,7 +47,7 @@ type OpenAPI3Viewer struct {
 func NewViewer() *OpenAPI3Viewer {
 	return &OpenAPI3Viewer{
 		data:       OpenAPI3{},
-		logger:     log.DefaultLogger(),
+		logger:     log.Default(),
 		factory:    NewFactoryStructToSchema(),
 		headers:    make(map[string]map[string]string),
 		cookies:    make(map[string]map[string]string),

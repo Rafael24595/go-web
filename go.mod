@@ -1,9 +1,14 @@
 module github.com/Rafael24595/go-web
 
-go 1.25.3
+go 1.25.5
 
 require (
+	github.com/Rafael24595/go-assert v0.2.0
 	github.com/Rafael24595/go-collections v0.6.0
+	github.com/Rafael24595/go-log v0.3.0
+)
+
+require (
 	github.com/swaggo/http-swagger/v2 v2.0.2
 	golang.org/x/text v0.32.0
 	gopkg.in/yaml.v3 v3.0.1
