@@ -1,4 +1,4 @@
-package router_test
+package support
 
 import (
 	"bytes"
@@ -7,23 +7,23 @@ import (
 	"net/http/httptest"
 )
 
-type testProduct struct {
+type TestProduct struct {
 	ID    int    `xml:"id"`
 	Name  string `xml:"name"`
 	Price string `xml:"price"`
 }
 
-type testUser struct {
+type TestUser struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
 }
 
-func newRequest(data string) *http.Request {
+func NewRequest(data string) *http.Request {
 	return &http.Request{
 		Body: io.NopCloser(bytes.NewReader([]byte(data))),
 	}
 }
 
-func newRecorder() *httptest.ResponseRecorder {
+func NewRecorder() *httptest.ResponseRecorder {
 	return httptest.NewRecorder()
 }

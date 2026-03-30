@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	assert "github.com/Rafael24595/go-assert/assert/test"
 	"github.com/Rafael24595/go-web/router"
 	"github.com/Rafael24595/go-web/router/result"
 )
@@ -36,9 +37,7 @@ func TestFallbackHandlers_Empty(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Next result when no handlers are provided")
-	}
+	assert.True(t, res.Ok())
 }
 
 func TestFallbackHandlers_FirstOkStopsExecution(t *testing.T) {
@@ -52,17 +51,10 @@ func TestFallbackHandlers_FirstOkStopsExecution(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Ok result")
-	}
+	assert.True(t, res.Ok())
 
-	if c1 != 1 {
-		t.Fatalf("expected first handler to be called once")
-	}
-
-	if c2 != 0 {
-		t.Fatalf("expected second handler NOT to be called")
-	}
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 0, c2)
 }
 
 func TestFallbackHandlers_FallbackToSecond(t *testing.T) {
@@ -76,13 +68,10 @@ func TestFallbackHandlers_FallbackToSecond(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Ok result from second handler")
-	}
+	assert.True(t, res.Ok())
 
-	if c1 != 1 || c2 != 1 {
-		t.Fatalf("expected both handlers to be executed")
-	}
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 1, c2)
 }
 
 func TestFallbackHandlers_AllFail(t *testing.T) {
@@ -96,17 +85,11 @@ func TestFallbackHandlers_AllFail(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Err() {
-		t.Fatalf("expected Err result")
-	}
+	assert.True(t, res.Err())
 
-	if res.Status() != 403 {
-		t.Fatalf("expected last handler error to be returned")
-	}
-
-	if c1 != 1 && c1 == c2 {
-		t.Fatalf("expected both handlers to be executed")
-	}
+	assert.Equal(t, 403, res.Status())
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 1, c2)
 }
 
 func TestValidateHandlers_Empty(t *testing.T) {
@@ -115,9 +98,7 @@ func TestValidateHandlers_Empty(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Ok result when no handlers are provided")
-	}
+	assert.True(t, res.Ok())
 }
 
 func TestValidateHandlers_AllOk(t *testing.T) {
@@ -131,13 +112,10 @@ func TestValidateHandlers_AllOk(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Ok result")
-	}
+	assert.True(t, res.Ok())
 
-	if c1 != 1 && c1 == c2 {
-		t.Fatalf("expected all handlers to be executed")
-	}
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 1, c2)
 }
 
 func TestValidateHandlers_FailFast(t *testing.T) {
@@ -151,17 +129,10 @@ func TestValidateHandlers_FailFast(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := h(w, r, ctx)
 
-	if !res.Err() {
-		t.Fatalf("expected Err result")
-	}
+	assert.True(t, res.Err())
 
-	if c1 != 1 {
-		t.Fatalf("expected first handler to be executed")
-	}
-
-	if c2 != 0 {
-		t.Fatalf("expected second handler NOT to be executed")
-	}
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 0, c2)
 }
 
 func TestCombinedHandlers(t *testing.T) {
@@ -180,11 +151,9 @@ func TestCombinedHandlers(t *testing.T) {
 	w, r, ctx := newTestReq()
 	res := strict(w, r, ctx)
 
-	if !res.Ok() {
-		t.Fatalf("expected Ok result")
-	}
+	assert.True(t, res.Ok())
 
-	if c1 != 1 && c1 == c2 && c2 == c3 {
-		t.Fatalf("unexpected handler execution counts")
-	}
+	assert.Equal(t, 1, c1)
+	assert.Equal(t, 1, c2)
+	assert.Equal(t, 1, c3)
 }
