@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"github.com/Rafael24595/go-collections/collection"
+	"github.com/Rafael24595/go-log/log"
+	"github.com/Rafael24595/go-log/log/model/record"
 	"github.com/Rafael24595/go-web/router/configuration"
 	"github.com/Rafael24595/go-web/router/docs"
-	"github.com/Rafael24595/go-web/router/log"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
@@ -100,7 +101,7 @@ type Router struct {
 // Use this function as the entry point to build and configure a new Router.
 func NewRouter() *Router {
 	return &Router{
-		logger:               log.DefaultLogger(),
+		logger:               log.Default(),
 		contextualizer:       collection.DictionaryEmpty[string, contextHandler](),
 		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[RequestHandler]](),
 		errors:               collection.DictionaryEmpty[string, errorHandler](),
@@ -398,10 +399,11 @@ func (r *Router) ListenWithTLS(host, hostTLS int, certTLS, keyTLS string) error 
 }
 
 func (r *Router) listenTLS(hostTLS, certTLS, keyTLS string, middleware []middleware) error {
+	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
 	server := &http.Server{
 		Addr:     hostTLS,
 		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(r.logger, "", 0),
+		ErrorLog: stdlog.New(writer, "", 0),
 	}
 
 	r.logger.Messagef("The app is listen at: %s with TLS", hostTLS)
@@ -409,10 +411,11 @@ func (r *Router) listenTLS(hostTLS, certTLS, keyTLS string, middleware []middlew
 }
 
 func (r *Router) listen(host string, middleware []middleware) error {
+	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
 	server := &http.Server{
 		Addr:     host,
 		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(r.logger, "", 0),
+		ErrorLog: stdlog.New(writer, "", 0),
 	}
 
 	r.logger.Messagef("The app is listen at: %s", host)
