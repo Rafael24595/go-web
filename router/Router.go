@@ -8,7 +8,7 @@ import (
 
 	"github.com/Rafael24595/go-collections/collection"
 	"github.com/Rafael24595/go-log/log"
-	"github.com/Rafael24595/go-log/log/model/record"
+	"github.com/Rafael24595/go-log/log/record"
 	"github.com/Rafael24595/go-web/router/configuration"
 	"github.com/Rafael24595/go-web/router/docs"
 	"github.com/Rafael24595/go-web/router/result"
