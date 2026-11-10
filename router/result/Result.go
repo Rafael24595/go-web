@@ -154,7 +154,7 @@ func Err(status int, err ...error) Result {
 	
 	message := collection.VectorMap(raw, func(e error) string {
 		return e.Error()
-	}).Join("/n")
+	}).Join("\n")
 
 	return Result{
 		ignore:  false,
