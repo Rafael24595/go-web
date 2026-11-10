@@ -540,11 +540,11 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 		return
 	}
 
-	wrt.WriteHeader(result.Status())
-
 	for k, v := range encoder.Headers() {
 		wrt.Header().Set(k, v)
 	}
+
+	wrt.WriteHeader(result.Status())
 
 	_, err = wrt.Write(encode)
 	if err != nil {
