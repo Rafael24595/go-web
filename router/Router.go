@@ -458,7 +458,9 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 
 	handler, ok := r.routes.Get(req.Pattern)
 	if !ok {
+		http.NotFound(wrt, req)
 		r.logger.Errors("Request handler not found")
+		return
 	}
 
 	ctx, ctxResult := r.initializeContext(wrt, req)
