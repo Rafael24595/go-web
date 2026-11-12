@@ -11,24 +11,35 @@ type middleware func(w http.ResponseWriter, req *http.Request) bool
 
 func corsMiddleware(cors Cors) middleware {
 	return func(w http.ResponseWriter, req *http.Request) bool {
-		origin := strings.Join(cors.allowedOrigins, ", ")
+		w.Header().Add("Vary", "Origin")
 
-		if origin == "*" {
-			origin = req.Header.Get("Origin")
-			w.Header().Set("Vary", "Origin")
+		origin := req.Header.Get("Origin")
+		if origin == "" {
+			return false
 		}
 
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		allowOrigin, ok := cors.allowOrigin(origin)
+		if !ok {
+			return false
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+
+		if cors.allowCredentials && allowOrigin != "*" {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+
+		requestMethod := req.Header.Get("Access-Control-Request-Method")
+		if req.Method != http.MethodOptions || requestMethod == "" {
+			return false
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", strings.Join(cors.allowedMethods, ", "))
 		w.Header().Set("Access-Control-Allow-Headers", strings.Join(cors.allowedHeaders, ", "))
-		w.Header().Set("Access-Control-Allow-Credentials", strconv.FormatBool(cors.allowCredentials))
 
-		if req.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return true
-		}
+		w.WriteHeader(http.StatusNoContent)
 
-		return false
+		return true
 	}
 }
 

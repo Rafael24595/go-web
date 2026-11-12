@@ -112,3 +112,23 @@ func (c *Cors) IsEmpty() bool {
 func (c *Cors) IsNotEmpty() bool {
 	return !c.IsEmpty()
 }
+
+func (c Cors) allowOrigin(origin string) (string, bool) {
+	for _, allowed := range c.allowedOrigins {
+		if allowed == origin {
+			return origin, true
+		}
+
+		if allowed != "*" {
+			continue
+		}
+
+		if c.allowCredentials {
+			return origin, true
+		}
+
+		return "*", true
+	}
+
+	return "", false
+}
