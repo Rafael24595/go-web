@@ -25,24 +25,28 @@ func EmptyCors() *Cors {
 	}
 }
 
-// PermissiveCors returns a Cors instance configured with a fully permissive policy.
+// PermissiveCors returns a Cors instance that lets any origin call the API
+// without credentials.
 //
 // The configuration allows:
 //   - Any origin (`*`)
 //   - HTTP methods: GET, POST, PUT, DELETE, OPTIONS
 //   - Headers: Content-Type, Authorization
-//   - Credentials (cookies, HTTP auth)
 //
-// This is useful for development, testing, or internal services where
-// strict CORS rules are not required. For production, it is generally
-// recommended to configure CORS explicitly using EmptyCors() and the
-// builder methods.
+// Credentials (cookies, HTTP authentication) are not allowed: together with
+// any origin they would let every website send requests with the user's
+// cookies and read the answers. A token sent by the client in the
+// Authorization header still works, because it is not a credential in the
+// CORS sense. To accept cookies from other origins, list those origins
+// explicitly with EmptyCors().AllowedOrigins(...).AllowCredentials().
+//
+// This is useful for development, testing, or public APIs. For production
+// services, configure CORS explicitly using EmptyCors() and the builder methods.
 func PermissiveCors() *Cors {
 	return EmptyCors().
 		AllowedOrigins("*").
 		AllowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS").
-		AllowedHeaders("Content-Type", "Authorization").
-		AllowCredentials()
+		AllowedHeaders("Content-Type", "Authorization")
 }
 
 // AllowedOrigins sets the list of allowed origins for CORS requests.
