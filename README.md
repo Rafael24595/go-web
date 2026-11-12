@@ -26,6 +26,61 @@ go get github.com/Rafael24595/go-web
 
 The `Router` is the central component that manages route registration, handlers, CORS, and documentation.
 
+#### 1.0 Creating and serving a router
+
+```go
+route := router.NewRouter()                          // routes on http.DefaultServeMux
+route := router.NewRouterWithMux(http.NewServeMux()) // routes on a mux of its own
+```
+
+`NewRouter()` registers its routes on the process-wide `http.DefaultServeMux`, so only one such router can declare a given route per process. Use `NewRouterWithMux` when several routers live in the same process, typically in tests. Passing `nil` creates a new mux.
+
+The router can start its own server:
+
+```go
+route.Listen(":8080")                                                                   // every interface
+route.Listen("127.0.0.1:8080")                                                          // local only
+route.ListenTLS(":8443", router.TLSFromFiles("server.crt", "server.key"))
+route.ListenWithTLS(":8080", ":8443", router.TLSFromFiles("server.crt", "server.key"))  // HTTP redirects to HTTPS
+```
+
+The certificate comes from a `TLSStrategy`: `TLSFromFiles` reads PEM files, `TLSFromConfig` takes a `*tls.Config` with certificates in memory (`Certificates`) or chosen per connection (`GetCertificate`, e.g. autocert or certificates renewed without restarting).
+
+An address made only of digits is taken as a port (`"8080"` is `":8080"`). `ListenWithTLS` answers every plain HTTP request with a `308 Permanent Redirect` to the HTTPS address, keeping the method and the body; the host comes from the request and the port from the TLS address (omitted when it is 443).
+
+Server settings are passed as options:
+
+| Option | `http.Server` field |
+|:--|:--|
+| `router.WithReadTimeout(d)` | `ReadTimeout` |
+| `router.WithReadHeaderTimeout(d)` | `ReadHeaderTimeout` |
+| `router.WithWriteTimeout(d)` | `WriteTimeout` |
+| `router.WithIdleTimeout(d)` | `IdleTimeout` |
+| `router.WithMaxHeaderBytes(n)` | `MaxHeaderBytes` |
+
+```go
+route.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
+```
+
+A `ServerOption` is a plain `func(*http.Server)`, so any other field can be set with your own function. `Addr`, `Handler` and `ErrorLog` are always set by the router and cannot be changed this way.
+
+To stop the server gracefully, give the router a context. When it is done, the servers stop accepting connections, in-flight requests get up to the shutdown timeout to finish, and `Listen` returns `nil`. `OnListen` is called with the real address once the server is listening, before it serves anything:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+err := router.NewRouter().
+	Context(ctx).
+	ShutdownTimeout(10 * time.Second). // default: router.DefaultShutdownTimeout (5s)
+	OnListen(func(addr net.Addr) { 
+        log.Printf("listening on %s", addr) 
+    }).
+	Listen("127.0.0.1:0") // port 0: OnListen tells which one was chosen
+```
+
+For tests (`httptest.NewServer`) or to mount the router inside a server of your own, `Handler()` returns it as an `http.Handler` with CORS applied.
+
 #### 1.1 Basic route
 
 ```go
@@ -81,10 +136,10 @@ route.RouteDocumentWithOptions("GET", options, "/secure", doc)
 #### 1.6 Context handler
 
 ```go
-route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+route.Contextualizer(func(http.ResponseWriter, *http.Request) (*router.Context, error) {
     context := router.NewContext()
     context.Put("username", "admin")
-    return *context, nil
+    return context, nil
 })
 ```
 
@@ -241,7 +296,7 @@ The `Cors` struct provides a fluent API for configuring cross-origin resource sh
 
 ```go
 cors := router.EmptyCors().
-    AllowedOrigins("https://example.com").
+    AllowedOrigins("https://example.com", "https://admin.example.com").
     AllowedMethods("GET", "POST").
     AllowedHeaders("Authorization").
     AllowCredentials()
@@ -249,9 +304,18 @@ cors := router.EmptyCors().
 route := router.NewRouter().Cors(cors)
 ```
 
+How requests are answered:
+
+- **No `Origin` header** (same-origin requests, `curl`, other servers): not a CORS request, no CORS headers.
+- **A listed origin**: `Access-Control-Allow-Origin` echoes that origin alone, and `Access-Control-Allow-Credentials: true` is added when credentials are allowed.
+- **An origin that is not listed**: no CORS headers; the request still reaches the route, and the browser blocks the response.
+- **`*` in the list**: any origin is allowed. Without credentials the answer is the literal `*`. With credentials browsers refuse `*`, so the request origin is echoed instead, which lets every website send credentialed requests: list the origins explicitly when you need cookies.
+- **Preflight** (`OPTIONS` with `Access-Control-Request-Method`) from an allowed origin: answered with `204 No Content` plus `Access-Control-Allow-Methods` and `Access-Control-Allow-Headers`; it never reaches the routes.
+- Every response carries `Vary: Origin`, so caches keep a separate copy per origin.
+
 #### 2.1 Permissive CORS
 
-Allows all origins, methods, and headers:
+Allows any origin, with the usual methods and the `Content-Type` and `Authorization` headers, **without credentials**: a token sent in the `Authorization` header works, cookies from other origins do not.
 
 ```go
 cors := router.PermissiveCors()
@@ -273,7 +337,7 @@ Reads the entire request body as raw bytes.
 - On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     bytes, res := router.InputBytes(r)
     if res != nil {
         return *res
@@ -290,7 +354,7 @@ Reads the entire request body as string.
 - On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     text, res := router.InputText(r)
     if res != nil {
         return *res
@@ -312,7 +376,7 @@ type User struct {
     Age  int    `json:"age"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     user, res := router.InputJson[User](r)
     if res != nil {
         return *res
@@ -337,7 +401,7 @@ type Product struct {
     Price string `xml:"price"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     product, res := router.InputXml[Product](r)
     if res != nil {
         return *res
@@ -354,7 +418,7 @@ All input types have a WithOpts variant that allows you to control:
 - Strict: whether to return an error if the limit is exceeded.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     opts := router.InputOpts{Limit: 1 << 20, Strict: true} // 1 MB strict limit
     data, res := router.InputBytesWithOpts(w, r, opts)
     if res != nil {
@@ -619,7 +683,7 @@ type DtoGreetings struct {
     Message string `json:"message" description:"Message"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
 	user := ctx.Getz("username").
 		Stringd("anonymous")
 	return result.CustomOk(fmt.Sprintf("hello %v from world", user), &CustomEncoder{})
@@ -647,10 +711,10 @@ func main() {
     cors := router.PermissiveCors()
     route.Cors(cors)
 
-    route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+    route.Contextualizer(func(http.ResponseWriter, *http.Request) (*router.Context, error) {
         context := router.NewContext()
         context.Put("username", "admin")
-        return *context, nil
+        return context, nil
     })
 
     route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
@@ -671,9 +735,25 @@ func main() {
 
     route.RouteDocument("GET", handler, "/hello/{%s}", doc)
     
-    route.Listen(":8080")
+    route.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
 }
 ```
+
+---
+
+## Migrating from v0.11
+
+- `Listen`, `ListenTLS` and `ListenWithTLS` take addresses (`":8080"`, `"127.0.0.1:8080"`) instead of port numbers, plus optional `ServerOption`s. A string of digits is still read as a port.
+- Routers keep their routes on their own mux: `NewRouterWithMux` and `Handler()` are new; `NewRouter()` still uses `http.DefaultServeMux`.
+- Response headers set by encoders (`Content-Type`) are now sent; before they were written after the status line and lost on real connections.
+- `PanicHandler` can be registered (it panicked in v0.11), and a request that reaches the router without a handler gets `404`.
+- `ListenWithTLS` redirects with `308` instead of `301`, and builds the target from the request host and the TLS port.
+- CORS follows the rules in section 2: only the matching origin is echoed, unlisted origins and requests without `Origin` get no CORS headers, preflights are answered with `204`, and `PermissiveCors()` no longer allows credentials.
+- `ListenTLS` and `ListenWithTLS` take a `TLSStrategy` (`TLSFromFiles`, `TLSFromConfig`) instead of the certificate and key paths.
+- `Context`, `ShutdownTimeout` and `OnListen` are new; `Listen` returns `nil` when the context stops the server, and `ListenWithTLS` stops both servers when either one stops.
+- `JsonErr`, `XmlErr` and `CustomErr` are now errors: they stop group contextualizers and reach the `ErrorHandler`.
+- Plain-text responses carry `charset=utf-8`, and text errors no longer end with a newline.
+- Requires Go 1.27.
 
 ---
 
