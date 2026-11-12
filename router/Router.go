@@ -533,8 +533,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 	}
 
 	if result.Err() {
-		http.Error(wrt, string(encode), result.Status())
-		return
+		wrt.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 
 	if result.File() {
