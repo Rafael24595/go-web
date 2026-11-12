@@ -2,8 +2,8 @@ package router
 
 import (
 	"fmt"
+	"net"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -43,8 +43,11 @@ func corsMiddleware(cors Cors) middleware {
 	}
 }
 
-func httpsRedirectMiddleware(hostTLS int) middleware {
-	portTLS := fmt.Sprintf(":%d", hostTLS)
+func httpsRedirectMiddleware(addrTLS string) middleware {
+	_, portTLS, err := net.SplitHostPort(addrTLS)
+	if err != nil {
+		portTLS = ""
+	}
 
 	return func(w http.ResponseWriter, req *http.Request) bool {
 		if req.TLS != nil {
@@ -71,7 +74,7 @@ func httpsRedirectMiddleware(hostTLS int) middleware {
 func applyMiddleware(next http.Handler, handlers []middleware) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		for _, handler := range handlers {
-			if exit := handler(w, req); exit {
+			if handler(w, req) {
 				return
 			}
 		}

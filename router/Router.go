@@ -1,9 +1,16 @@
 package router
 
 import (
-	"fmt"
 	stdlog "log"
+
+	"context"
+	"errors"
+	"time"
+
+	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Rafael24595/go-collections/collection"
@@ -17,12 +24,22 @@ import (
 const (
 	// Base is the key used to register global handlers (contextualizer, error, panic)
 	Base = "$BASE"
+	// DefaultShutdownTimeout is how long in-flight requests get to finish when
+	// the router's context is done, unless ShutdownTimeout sets another value.
+	DefaultShutdownTimeout = 5 * time.Second
 )
 
 type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
 type RequestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
 type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
+
+// OnListenFn receives the address a server is listening on; see Router.OnListen.
+type OnListenFn func(net.Addr)
+
+// ErrTLSStrategyRequired is returned by ListenTLS and ListenWithTLS when the
+// TLS strategy is nil.
+var ErrTLSStrategyRequired = errors.New("router: a TLS strategy is required")
 
 // HandlerOptions represents advanced configuration for a route handler.
 //
@@ -402,91 +419,184 @@ func (r *Router) Cors(cors *Cors) *Router {
 	return r
 }
 
-// Listen starts an HTTP server on the given host.
-//
-// Example:
-//
-//	router.Listen(8080)
-//
-// CORS and other startup middlewares are automatically applied.
-func (r *Router) Listen(host int) error {
-	port := fmt.Sprintf(":%d", host)
-	
-	middleware := make([]middleware, 0)
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
-	}
-	
-	return r.listen(port, middleware)
+// Handler returns the router as an http.Handler with its middlewares (CORS)
+// applied. Prefer Listen, ListenTLS and ListenWithTLS, which also manage the
+// server's lifetime; use Handler for tests (httptest.NewServer) or to mount
+// the router inside a server you build yourself.
+func (r *Router) Handler() http.Handler {
+	middleware := r.middlewares()
+	return applyMiddleware(r.server, middleware)
 }
 
-// ListenTLS starts an HTTPS server on the given host with TLS enabled.
+// Listen starts an HTTP server on addr (":8080", "127.0.0.1:8080"; a number
+// alone is a port) and blocks until it stops. It returns nil when the router's
+// context ends the server, and an error if addr cannot be used, the server
+// fails, or in-flight requests outlive the shutdown timeout.
 //
-// Requires a certificate and private key.
-//
-// Example:
-//
-//	router.ListenTLS(8443, "server.crt", "server.key")
-func (r *Router) ListenTLS(hostTLS int, certTLS, keyTLS string) error {
-	portTLS := fmt.Sprintf(":%d", hostTLS)
+//	router.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
+func (r *Router) Listen(addr string, options ...ServerOption) error {
+	addr = normalizeAddr(addr)
+	middleware := r.middlewares()
 
-	middleware := make([]middleware, 0)
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
-	}
+	server := r.newServer(addr, middleware, options...)
+	strategy := servePlain()
 
-	return r.listenTLS(portTLS, certTLS, keyTLS, middleware)
+	return r.run(r.ctx, server, strategy)
 }
 
-// ListenWithTLS starts both HTTP and HTTPS servers in parallel.
+// ListenTLS is Listen over HTTPS, with the certificate given by tls.
 //
-// The HTTP server listens on the first host and automatically redirects
-// all requests to the HTTPS server. The HTTPS server listens on the
-// second host using the provided certificate and key.
-//
-// Example:
-//
-//	router.ListenWithTLS(8080, 8443, "server.crt", "server.key")
-func (r *Router) ListenWithTLS(host, hostTLS int, certTLS, keyTLS string) error {
-	middleware := make([]middleware, 0)
-	middleware = append(middleware, httpsRedirectMiddleware(hostTLS))
-
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
+//	router.ListenTLS(":8443", router.TLSFromFiles("server.crt", "server.key"))
+func (r *Router) ListenTLS(
+	addr string,
+	tls TLSStrategy,
+	options ...ServerOption,
+) error {
+	if tls == nil {
+		return ErrTLSStrategyRequired
 	}
 
+	addr = normalizeAddr(addr)
+	middleware := r.middlewares()
+
+	server := r.newServer(addr, middleware, options...)
+
+	strategy, err := tls()
+	if err != nil {
+		return err
+	}
+
+	return r.run(r.ctx, server, strategy)
+}
+
+// ListenWithTLS runs an HTTP server on addr that redirects every request
+// (308) to an HTTPS server on addrTLS. When either server stops, the other
+// one is stopped too.
+//
+//	router.ListenWithTLS(":8080", ":8443", router.TLSFromFiles("server.crt", "server.key"))
+func (r *Router) ListenWithTLS(
+	addr, addrTLS string,
+	tls TLSStrategy,
+	options ...ServerOption,
+) error {
+	if tls == nil {
+		return ErrTLSStrategyRequired
+	}
+
+	addr = normalizeAddr(addr)
+	addrTLS = normalizeAddr(addrTLS)
+
+	redirect := []middleware{
+		httpsRedirectMiddleware(addrTLS),
+	}
+
+	secure := r.middlewares()
+
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+
+	strategy, err := tls()
+	if err != nil {
+		return err
+	}
+
+	plain := make(chan error, 1)
 	go func() {
-		port := fmt.Sprintf(":%d", host)
-		if err := r.listen(port, middleware); err != nil {
-			r.logger.Error(err)
-		}
+		defer cancel()
+		server := r.newServer(addr, redirect, options...)
+		strategy := servePlain()
+		plain <- r.run(ctx, server, strategy)
 	}()
 
-	return r.ListenTLS(hostTLS, certTLS, keyTLS)
+	server := r.newServer(addrTLS, secure, options...)
+
+	err = r.run(ctx, server, strategy)
+	cancel()
+
+	return errors.Join(err, <-plain)
 }
 
-func (r *Router) listenTLS(hostTLS, certTLS, keyTLS string, middleware []middleware) error {
-	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
-	server := &http.Server{
-		Addr:     hostTLS,
-		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(writer, "", 0),
+func (r *Router) middlewares() []middleware {
+	if r.cors.IsEmpty() {
+		return nil
 	}
 
-	r.logger.Messagef("The app is listen at: %s with TLS", hostTLS)
-	return server.ListenAndServeTLS(certTLS, keyTLS)
+	return []middleware{
+		corsMiddleware(*r.cors),
+	}
 }
 
-func (r *Router) listen(host string, middleware []middleware) error {
-	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
-	server := &http.Server{
-		Addr:     host,
-		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(writer, "", 0),
+func (r *Router) newServer(
+	addr string,
+	middleware []middleware,
+	options ...ServerOption,
+) *http.Server {
+	server := &http.Server{}
+
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
 	}
 
-	r.logger.Messagef("The app is listen at: %s", host)
-	return server.ListenAndServe()
+	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
+
+	server.Addr = addr
+	server.Handler = applyMiddleware(r.server, middleware)
+	server.ErrorLog = stdlog.New(writer, "", 0)
+
+	return server
+}
+
+func (r *Router) run(ctx context.Context, server *http.Server, strategy serveStrategy) error {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+
+	r.logger.Messagef("The app is listening at %s://%s", strategy.scheme, listener.Addr())
+
+	if r.onListen != nil {
+		r.onListen(listener.Addr())
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan error, 1)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+			stopped <- nil
+			return
+		}
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.shutdownTimeout)
+		defer cancel()
+		stopped <- server.Shutdown(shutdownCtx)
+	}()
+
+	err = strategy.serve(server, listener)
+
+	if !errors.Is(err, http.ErrServerClosed) {
+		close(done)
+		<-stopped
+		return err
+	}
+
+	return <-stopped
+}
+
+func normalizeAddr(addr string) string {
+	if addr == "" {
+		return addr
+	}
+
+	if _, err := strconv.Atoi(addr); err == nil {
+		return net.JoinHostPort("", addr)
+	}
+
+	return addr
 }
 
 // ViewerSources retrieves the list of documentation sources currently
