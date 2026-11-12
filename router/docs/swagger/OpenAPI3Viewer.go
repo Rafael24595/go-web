@@ -9,9 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Rafael24595/go-web/router/docs"
-	"github.com/Rafael24595/go-log/log"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+
+	"github.com/Rafael24595/go-log/log"
+	"github.com/Rafael24595/go-web/router/docs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,12 +23,8 @@ const SWAGGER_JSON = "/swagger/doc.json"
 
 // OpenAPI3ViewerOptions defines the configuration for the OpenAPI 3.0 viewer.
 type OpenAPI3ViewerOptions struct {
-	Version   string // API version
-	EnableTLS bool   // Whether to expose an HTTPS server URL
-	OnlyTLS   bool   // Whether to expose only HTTPS server URL
-	Port      int    // HTTP port
-	PortTLS   int    // HTTPS port
-	FileYML   string // Path to an existing OpenAPI YAML file to preload
+	Version string // API version
+	FileYML string // Path to an existing OpenAPI YAML file to preload
 }
 
 // OpenAPI3Viewer implements the docs.IDocViewer interface
@@ -74,22 +71,8 @@ func (v *OpenAPI3Viewer) Load(options OpenAPI3ViewerOptions) docs.IDocViewer {
 		data = &OpenAPI3{}
 	}
 
-	data.Servers = []Server{}
-
-	if !options.OnlyTLS {
-		httpURL := fmt.Sprintf("http://localhost:%d", options.Port)
-		data.Servers = append(data.Servers, Server{
-			URL:         httpURL,
-			Description: "HTTP server",
-		})
-	}
-
-	if options.EnableTLS {
-		httpsURL := fmt.Sprintf("https://localhost:%d", options.PortTLS)
-		data.Servers = append(data.Servers, Server{
-			URL:         httpsURL,
-			Description: "HTTPS server",
-		})
+	data.Servers = []Server{
+		{URL: "/", Description: "This server"},
 	}
 
 	data.Info.Version = options.Version
