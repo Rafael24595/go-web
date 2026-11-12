@@ -13,19 +13,12 @@ import (
 
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-web/router/docs"
-	"gopkg.in/yaml.v3"
 )
 
 const SWAGGER string = "SWAGGER"
 
 const SWAGGER_ROUTE = "/swagger/"
 const SWAGGER_JSON = "/swagger/doc.json"
-
-// OpenAPI3ViewerOptions defines the configuration for the OpenAPI 3.0 viewer.
-type OpenAPI3ViewerOptions struct {
-	Version string // API version
-	FileYML string // Path to an existing OpenAPI YAML file to preload
-}
 
 // OpenAPI3Viewer implements the docs.IDocViewer interface
 // and exposes API documentation in OpenAPI 3.0 format.
@@ -59,30 +52,25 @@ func (v *OpenAPI3Viewer) Logger(logger log.Log) docs.IDocViewer {
 	return v
 }
 
-// Load loads the OpenAPI 3 specification from a YAML file,
-// and configures server URLs based on the provided options.
-//
-// It automatically registers `http://localhost:{Port}` if OnlyTLS is false,
-// and `https://localhost:{PortTLS}` if EnableTLS is true.
-func (v *OpenAPI3Viewer) Load(options OpenAPI3ViewerOptions) docs.IDocViewer {
-	data, err := loadYAML(options.FileYML)
+// Load sets the definition the viewer starts from: OpenAPI 3.0.0, the fields
+// set by options (applied in order) and this server ("/") as the only server.
+// When an option fails, Load returns its error and leaves the viewer unchanged.
+func (v *OpenAPI3Viewer) Load(options ...OpenAPI3ViewerOption) error {
+	data, err := applyOptions(options...)
 	if err != nil {
-		v.logger.Error(err)
-		data = &OpenAPI3{}
+		return err
 	}
 
 	data.Servers = []Server{
 		{URL: "/", Description: "This server"},
 	}
 
-	data.Info.Version = options.Version
-
 	v.logger.Customf(SWAGGER, "Swagger interface displayed on %s", SWAGGER_ROUTE)
 	v.logger.Customf(SWAGGER, "Swagger JSON displayed on %s", SWAGGER_JSON)
 
 	v.data = *data
 
-	return v
+	return nil
 }
 
 // RegisterGroup registers shared documentation (headers, cookies, responses)
@@ -394,16 +382,4 @@ func makeTags(route docs.DocOperation) []string {
 	}
 
 	return tags
-}
-
-func loadYAML(filename string) (*OpenAPI3, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	var doc OpenAPI3
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, err
-	}
-	return &doc, nil
 }
