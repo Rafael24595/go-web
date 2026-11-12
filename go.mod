@@ -3,9 +3,9 @@ module github.com/Rafael24595/go-web
 go 1.27.4
 
 require (
-	github.com/Rafael24595/go-assert v0.3.0
+	github.com/Rafael24595/go-assert v0.11.0
 	github.com/Rafael24595/go-collections v0.6.0
-	github.com/Rafael24595/go-log v0.4.0
+	github.com/Rafael24595/go-log v0.5.0
 )
 
 require (
