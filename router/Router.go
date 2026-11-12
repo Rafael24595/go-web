@@ -155,7 +155,7 @@ func NewRouterWithMux(server *http.ServeMux) *Router {
 		panics:               collection.DictionaryEmpty[string, panicHandler](),
 		routes:               collection.DictionaryEmpty[string, RequestHandler](),
 		basePath:             "",
-		cors:                 EmptyCors(),
+		cors:                 NewCors(),
 		docViewer:            docs.VoidViewer(),
 	}
 }
