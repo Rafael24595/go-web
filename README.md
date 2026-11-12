@@ -295,7 +295,7 @@ This approach keeps handlers simple and moves orchestration logic to the router 
 The `Cors` struct provides a fluent API for configuring cross-origin resource sharing.
 
 ```go
-cors := router.EmptyCors().
+cors := router.NewCors().
     AllowedOrigins("https://example.com", "https://admin.example.com").
     AllowedMethods("GET", "POST").
     AllowedHeaders("Authorization").
