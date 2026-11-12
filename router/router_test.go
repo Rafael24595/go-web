@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Rafael24595/go-assert/assert"
+	"github.com/Rafael24595/go-assert/require"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
@@ -316,4 +317,106 @@ func TestRouter_JsonErrInGroupContextualizerStopsTheRequest(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
 	assert.Inside(t, "no token", string(body))
+}
+
+func TestRouterUse(t *testing.T) {
+	origin := "https://app.example.com"
+
+	ok := func(w http.ResponseWriter, req *http.Request, ctx *Context) result.Result {
+		return result.TextOk("ok")
+	}
+
+	wrap := func(calls *[]string, name string) Middleware {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				*calls = append(*calls, name)
+				next.ServeHTTP(w, req)
+			})
+		}
+	}
+
+	forbid := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+		})
+	}
+
+	t.Run("the first middleware added is the outermost", func(t *testing.T) {
+		var calls []string
+
+		router := NewRouterWithMux(nil).
+			Use(
+				wrap(&calls, "first"),
+				nil,
+				wrap(&calls, "second"),
+			).
+			Use(wrap(&calls, "third")).
+			Route(http.MethodGet, ok, "/x")
+
+		recorder := httptest.NewRecorder()
+		router.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+		want := []string{"first", "second", "third"}
+
+		require.Size(t, len(want), calls)
+
+		for i := range want {
+			assert.Equal(t, want[i], calls[i])
+		}
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+	})
+
+	t.Run("a middleware can stop the request", func(t *testing.T) {
+		router := NewRouterWithMux(nil).
+			Use(forbid).
+			Route(http.MethodGet, ok, "/x")
+
+		recorder := httptest.NewRecorder()
+		router.Handler().
+			ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+	})
+
+	t.Run("a preflight is answered before the middlewares", func(t *testing.T) {
+		cors := NewCors().
+			AllowedOrigins(origin).
+			AllowedMethods("GET")
+
+		router := NewRouterWithMux(nil).
+			Cors(cors).
+			Use(forbid).
+			Route(http.MethodGet, ok, "/x")
+
+		req := httptest.NewRequest(http.MethodOptions, "/x", nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+
+		recorder := httptest.NewRecorder()
+		router.Handler().ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusNoContent, recorder.Code)
+		assertHeader(t, recorder, "Access-Control-Allow-Origin", origin)
+	})
+
+	t.Run("a rejection carries the CORS headers", func(t *testing.T) {
+		cors := NewCors().
+			AllowedOrigins(origin).
+			AllowedMethods("GET")
+
+		router := NewRouterWithMux(nil).
+			Cors(cors).
+			Use(forbid).
+			Route(http.MethodGet, ok, "/x")
+
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.Header.Set("Origin", origin)
+
+		recorder := httptest.NewRecorder()
+		router.Handler().ServeHTTP(recorder, req)
+
+		assert.Equal(t, http.StatusForbidden, recorder.Code)
+		assertHeader(t, recorder, "Access-Control-Allow-Origin", origin)
+	})
 }

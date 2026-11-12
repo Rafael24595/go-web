@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,9 @@ type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
 type RequestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
 type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
+
+// Middleware wraps the router's handler. Registered with Router.Use.
+type Middleware func(http.Handler) http.Handler
 
 // OnListenFn receives the address a server is listening on; see Router.OnListen.
 type OnListenFn func(net.Addr)
@@ -113,8 +117,9 @@ type Router struct {
 	panics               collection.IDictionary[string, panicHandler]
 	routes               collection.IDictionary[string, RequestHandler]
 
-	basePath string
-	cors     *Cors
+	basePath   string
+	middleware []Middleware
+	cors       *Cors
 
 	docViewer docs.IDocViewer
 	onListen  func(net.Addr)
@@ -408,6 +413,21 @@ func (r *Router) route(method string, pattern string, options *HandlerOptions, d
 	return r
 }
 
+// Use adds middlewares around every route served by Listen, ListenTLS,
+// ListenWithTLS and Handler. The first one added is the outermost. They run
+// after the built-in CORS handling: preflight requests are answered before
+// reaching them, and their responses (a 403 from a Host check, for instance)
+// already carry the CORS headers, so cross-origin clients can read them.
+// They are not applied to the HTTP-to-HTTPS redirect server of ListenWithTLS.
+func (r *Router) Use(middlewares ...Middleware) *Router {
+	for _, m := range middlewares {
+		if m != nil {
+			r.middleware = append(r.middleware, m)
+		}
+	}
+	return r
+}
+
 // Cors configures the Router's CORS policy.
 //
 // This controls which origins, methods, headers, and credentials are
@@ -424,8 +444,7 @@ func (r *Router) Cors(cors *Cors) *Router {
 // server's lifetime; use Handler for tests (httptest.NewServer) or to mount
 // the router inside a server you build yourself.
 func (r *Router) Handler() http.Handler {
-	middleware := r.middlewares()
-	return applyMiddleware(r.server, middleware)
+	return r.serving()
 }
 
 // Listen starts an HTTP server on addr (":8080", "127.0.0.1:8080"; a number
@@ -436,9 +455,9 @@ func (r *Router) Handler() http.Handler {
 //	router.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
 func (r *Router) Listen(addr string, options ...ServerOption) error {
 	addr = normalizeAddr(addr)
-	middleware := r.middlewares()
+	handler := r.serving()
 
-	server := r.newServer(addr, middleware, options...)
+	server := r.newServer(addr, handler, options...)
 	strategy := servePlain()
 
 	return r.run(r.ctx, server, strategy)
@@ -457,9 +476,9 @@ func (r *Router) ListenTLS(
 	}
 
 	addr = normalizeAddr(addr)
-	middleware := r.middlewares()
+	handler := r.serving()
 
-	server := r.newServer(addr, middleware, options...)
+	server := r.newServer(addr, handler, options...)
 
 	strategy, err := tls()
 	if err != nil {
@@ -486,12 +505,6 @@ func (r *Router) ListenWithTLS(
 	addr = normalizeAddr(addr)
 	addrTLS = normalizeAddr(addrTLS)
 
-	redirect := []interceptor{
-		httpsRedirectInterceptor(addrTLS),
-	}
-
-	secure := r.middlewares()
-
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
 
@@ -503,12 +516,18 @@ func (r *Router) ListenWithTLS(
 	plain := make(chan error, 1)
 	go func() {
 		defer cancel()
-		server := r.newServer(addr, redirect, options...)
+		handler := applyInterceptor(
+			r.server, httpsRedirectInterceptor(addrTLS),
+		)
+
+		server := r.newServer(addr, handler, options...)
 		strategy := servePlain()
+
 		plain <- r.run(ctx, server, strategy)
 	}()
 
-	server := r.newServer(addrTLS, secure, options...)
+	handler := r.serving()
+	server := r.newServer(addrTLS, handler, options...)
 
 	err = r.run(ctx, server, strategy)
 	cancel()
@@ -516,19 +535,24 @@ func (r *Router) ListenWithTLS(
 	return errors.Join(err, <-plain)
 }
 
-func (r *Router) middlewares() []interceptor {
-	if r.cors.IsEmpty() {
-		return nil
+func (r *Router) serving() http.Handler {
+	var handler http.Handler = r.server
+	for _, v := range slices.Backward(r.middleware) {
+		handler = v(handler)
 	}
 
-	return []interceptor{
-		corsInterceptor(*r.cors),
+	if r.cors.IsEmpty() {
+		return handler
 	}
+
+	return applyInterceptor(
+		handler, corsInterceptor(*r.cors),
+	)
 }
 
 func (r *Router) newServer(
 	addr string,
-	middleware []middleware,
+	handler http.Handler,
 	options ...ServerOption,
 ) *http.Server {
 	server := &http.Server{}
@@ -542,7 +566,7 @@ func (r *Router) newServer(
 	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
 
 	server.Addr = addr
-	server.Handler = applyMiddleware(r.server, middleware)
+	server.Handler = handler
 	server.ErrorLog = stdlog.New(writer, "", 0)
 
 	return server
