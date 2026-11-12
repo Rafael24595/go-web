@@ -486,8 +486,8 @@ func (r *Router) ListenWithTLS(
 	addr = normalizeAddr(addr)
 	addrTLS = normalizeAddr(addrTLS)
 
-	redirect := []middleware{
-		httpsRedirectMiddleware(addrTLS),
+	redirect := []interceptor{
+		httpsRedirectInterceptor(addrTLS),
 	}
 
 	secure := r.middlewares()
@@ -516,13 +516,13 @@ func (r *Router) ListenWithTLS(
 	return errors.Join(err, <-plain)
 }
 
-func (r *Router) middlewares() []middleware {
+func (r *Router) middlewares() []interceptor {
 	if r.cors.IsEmpty() {
 		return nil
 	}
 
-	return []middleware{
-		corsMiddleware(*r.cors),
+	return []interceptor{
+		corsInterceptor(*r.cors),
 	}
 }
 

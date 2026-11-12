@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-type middleware func(w http.ResponseWriter, req *http.Request) bool
+type interceptor func(w http.ResponseWriter, req *http.Request) bool
 
-func corsMiddleware(cors Cors) middleware {
+func corsInterceptor(cors Cors) interceptor {
 	return func(w http.ResponseWriter, req *http.Request) bool {
 		w.Header().Add("Vary", "Origin")
 
@@ -43,7 +43,7 @@ func corsMiddleware(cors Cors) middleware {
 	}
 }
 
-func httpsRedirectMiddleware(addrTLS string) middleware {
+func httpsRedirectInterceptor(addrTLS string) interceptor {
 	_, portTLS, err := net.SplitHostPort(addrTLS)
 	if err != nil {
 		portTLS = ""
@@ -71,10 +71,10 @@ func httpsRedirectMiddleware(addrTLS string) middleware {
 	}
 }
 
-func applyMiddleware(next http.Handler, handlers []middleware) http.Handler {
+func applyInterceptor(next http.Handler, interceptors ...interceptor) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		for _, handler := range handlers {
-			if handler(w, req) {
+		for _, interceptor := range interceptors {
+			if interceptor(w, req) {
 				return
 			}
 		}

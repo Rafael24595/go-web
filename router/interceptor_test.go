@@ -7,23 +7,14 @@ import (
 	"testing"
 
 	"github.com/Rafael24595/go-assert/assert"
+	"github.com/Rafael24595/go-assert/require"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
-func run(middleware middleware, req *http.Request) (bool, *httptest.ResponseRecorder) {
+func run(interceptor interceptor, req *http.Request) (bool, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
-	stop := middleware(recorder, req)
+	stop := interceptor(recorder, req)
 	return stop, recorder
-}
-
-func assertCalls(t *testing.T, got []string, want ...string) {
-	t.Helper()
-
-	assert.Size(t, len(want), got)
-
-	for i := range want {
-		assert.Equal(t, want[i], got[i])
-	}
 }
 
 func assertHeader(t *testing.T, recorder *httptest.ResponseRecorder, header, want string) {
@@ -31,7 +22,7 @@ func assertHeader(t *testing.T, recorder *httptest.ResponseRecorder, header, wan
 	assert.Equal(t, want, recorder.Header().Get(header))
 }
 
-func TestHttpsRedirectMiddleware(t *testing.T) {
+func TestHttpsRedirectInterceptor(t *testing.T) {
 	tests := []struct {
 		name     string
 		addrTLS  string
@@ -98,7 +89,7 @@ func TestHttpsRedirectMiddleware(t *testing.T) {
 			}
 
 			stop, recorder := run(
-				httpsRedirectMiddleware(tt.addrTLS), req,
+				httpsRedirectInterceptor(tt.addrTLS), req,
 			)
 
 			assert.True(t, stop)
@@ -108,20 +99,20 @@ func TestHttpsRedirectMiddleware(t *testing.T) {
 	}
 }
 
-func TestHttpsRedirectMiddleware_LetsTLSRequestsThrough(t *testing.T) {
+func TestHttpsRedirectInterceptor_LetsTLSRequestsThrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/x", nil)
 	req.TLS = &tls.ConnectionState{}
 
 	stop, recorder := run(
-		httpsRedirectMiddleware(":8443"), req,
+		httpsRedirectInterceptor(":8443"), req,
 	)
 
 	assert.False(t, stop)
 	assert.Equal(t, "", recorder.Header().Get("Location"))
 }
 
-func TestCorsMiddleware(t *testing.T) {
-	listed := EmptyCors().
+func TestCorsInterceptor(t *testing.T) {
+	listed := NewCors().
 		AllowedOrigins("https://a.example.com", "https://b.example.com").
 		AllowedMethods("GET", "PUT").
 		AllowedHeaders("Content-Type", "Authorization").
@@ -132,7 +123,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Origin", "https://b.example.com")
 
 		stop, recorder := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.False(t, stop)
@@ -149,7 +140,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Origin", "https://evil.example.com")
 
 		stop, recorder := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.False(t, stop)
@@ -164,7 +155,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/x", nil)
 
 		stop, recorder := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.False(t, stop)
@@ -172,7 +163,7 @@ func TestCorsMiddleware(t *testing.T) {
 	})
 
 	t.Run("wildcard without credentials answers *", func(t *testing.T) {
-		cors := EmptyCors().
+		cors := NewCors().
 			AllowedOrigins("*").
 			AllowedMethods("GET")
 
@@ -180,7 +171,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Origin", "https://any.example.com")
 
 		_, recorder := run(
-			corsMiddleware(*cors), req,
+			corsInterceptor(*cors), req,
 		)
 
 		assertHeader(t, recorder, "Access-Control-Allow-Origin", "*")
@@ -188,7 +179,7 @@ func TestCorsMiddleware(t *testing.T) {
 	})
 
 	t.Run("wildcard with credentials echoes the origin", func(t *testing.T) {
-		cors := EmptyCors().
+		cors := NewCors().
 			AllowedOrigins("*").
 			AllowCredentials()
 
@@ -196,7 +187,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Origin", "https://any.example.com")
 
 		_, recorder := run(
-			corsMiddleware(*cors), req,
+			corsInterceptor(*cors), req,
 		)
 
 		assertHeader(t, recorder, "Access-Control-Allow-Origin", "https://any.example.com")
@@ -209,7 +200,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Access-Control-Request-Method", "PUT")
 
 		stop, recorder := run(
-			corsMiddleware(*PermissiveCors()), req,
+			corsInterceptor(*PermissiveCors()), req,
 		)
 
 		assert.True(t, stop)
@@ -219,14 +210,14 @@ func TestCorsMiddleware(t *testing.T) {
 	})
 
 	t.Run("credentials are not announced unless enabled", func(t *testing.T) {
-		cors := EmptyCors().
+		cors := NewCors().
 			AllowedOrigins("https://a.example.com")
 
 		req := httptest.NewRequest(http.MethodGet, "/x", nil)
 		req.Header.Set("Origin", "https://a.example.com")
 
 		_, recorder := run(
-			corsMiddleware(*cors), req,
+			corsInterceptor(*cors), req,
 		)
 
 		assertHeader(t, recorder, "Access-Control-Allow-Credentials", "")
@@ -238,12 +229,12 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Access-Control-Request-Method", "PUT")
 
 		stop, recorder := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.True(t, stop)
 		assert.Equal(t, http.StatusNoContent, recorder.Code)
-		
+
 		assertHeader(t, recorder, "Access-Control-Allow-Origin", "https://a.example.com")
 		assertHeader(t, recorder, "Access-Control-Allow-Methods", "GET, PUT")
 		assertHeader(t, recorder, "Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -255,7 +246,7 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Access-Control-Request-Method", "PUT")
 
 		stop, recorder := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.False(t, stop)
@@ -267,15 +258,15 @@ func TestCorsMiddleware(t *testing.T) {
 		req.Header.Set("Origin", "https://any.example.com")
 
 		stop, _ := run(
-			corsMiddleware(*listed), req,
+			corsInterceptor(*listed), req,
 		)
 
 		assert.False(t, stop)
 	})
 }
 
-func TestApplyMiddleware(t *testing.T) {
-	record := func(calls *[]string, name string, stop bool) middleware {
+func TestApplyInterceptor(t *testing.T) {
+	record := func(calls *[]string, name string, stop bool) interceptor {
 		return func(w http.ResponseWriter, req *http.Request) bool {
 			*calls = append(*calls, name)
 			return stop
@@ -291,53 +282,57 @@ func TestApplyMiddleware(t *testing.T) {
 	t.Run("runs in order and reaches the handler", func(t *testing.T) {
 		var calls []string
 
-		handler := applyMiddleware(
+		handler := applyInterceptor(
 			next(&calls),
-			[]middleware{
-				record(&calls, "first", false),
-				record(&calls, "second", false),
-			},
+			record(&calls, "first", false),
+			record(&calls, "second", false),
 		)
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 
-		assertCalls(t, calls, "first", "second", "handler")
+		want := []string{"first", "second", "handler"}
+
+		require.Size(t, len(want), calls)
+
+		for i := range want {
+			assert.Equal(t, want[i], calls[i])
+		}
 	})
 
-	t.Run("a middleware that stops skips the rest", func(t *testing.T) {
+	t.Run("a interceptor that stops skips the rest", func(t *testing.T) {
 		var calls []string
 
-		handler := applyMiddleware(
+		handler := applyInterceptor(
 			next(&calls),
-			[]middleware{
-				record(&calls, "first", true),
-				record(&calls, "second", false),
-			},
+			record(&calls, "first", true),
+			record(&calls, "second", false),
 		)
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 
-		assertCalls(t, calls, "first")
+		require.Size(t, 1, calls)
+		assert.Equal(t, "first", calls[0])
 	})
 
-	t.Run("no middleware", func(t *testing.T) {
+	t.Run("no interceptor", func(t *testing.T) {
 		var calls []string
 
-		handler := applyMiddleware(next(&calls), nil)
+		handler := applyInterceptor(next(&calls))
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(httptest.NewRecorder(), req)
 
-		assertCalls(t, calls, "handler")
+		require.Size(t, 1, calls)
+		assert.Equal(t, "handler", calls[0])
 	})
 }
 
 func TestRouterHandler_AppliesCors(t *testing.T) {
 	origin := "https://app.example.com"
 
-	cors := EmptyCors().
+	cors := NewCors().
 		AllowedOrigins(origin).
 		AllowedMethods("GET")
 
