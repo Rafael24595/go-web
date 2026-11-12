@@ -80,22 +80,36 @@ func (h *HandlerOptions) Panic(panic *panicHandler) *HandlerOptions {
 	return h
 }
 
+// Router is the main entry point for defining and running HTTP routes.
+//
+// It provides methods to register routes, contextualizers, error handlers,
 type Router struct {
-	logger               log.Log
+	logger log.Log
+
+	server          *http.ServeMux
+	ctx             context.Context
+	shutdownTimeout time.Duration
+
 	contextualizer       collection.IDictionary[string, contextHandler]
 	groupContextualizers collection.IDictionary[string, collection.Vector[RequestHandler]]
 	errors               collection.IDictionary[string, errorHandler]
 	panics               collection.IDictionary[string, panicHandler]
 	routes               collection.IDictionary[string, RequestHandler]
-	basePath             string
-	cors                 *Cors
-	docViewer            docs.IDocViewer
+
+	basePath string
+	cors     *Cors
+
+	docViewer docs.IDocViewer
+	onListen  func(net.Addr)
 }
 
-// NewRouter creates and initializes a new Router instance with sensible defaults.
+// NewRouter creates a Router that registers its routes on http.DefaultServeMux.
+// Only one such router can declare a given route per process; use
+// NewRouterWithMux when several routers live in the same process, as in tests.
 //
 // The router comes with:
 //   - a default logger
+//   - an HTTP server using the default ServeMux
 //   - empty collections for routes, error handlers, panic handlers, and contextualizers
 //   - an empty base path
 //   - default CORS configuration
@@ -103,8 +117,21 @@ type Router struct {
 //
 // Use this function as the entry point to build and configure a new Router.
 func NewRouter() *Router {
+	return NewRouterWithMux(http.DefaultServeMux)
+}
+
+// NewRouterWithMux creates a Router that registers its routes on mux.
+// A nil mux creates a new one.
+func NewRouterWithMux(server *http.ServeMux) *Router {
+	if server == nil {
+		server = http.NewServeMux()
+	}
+
 	return &Router{
 		logger:               log.Default(),
+		server:               server,
+		ctx:                  context.Background(),
+		shutdownTimeout:      DefaultShutdownTimeout,
 		contextualizer:       collection.DictionaryEmpty[string, contextHandler](),
 		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[RequestHandler]](),
 		errors:               collection.DictionaryEmpty[string, errorHandler](),
@@ -128,6 +155,42 @@ func (r *Router) Logger(logger log.Log) *Router {
 	return r
 }
 
+// Context ties the servers started by Listen, ListenTLS and ListenWithTLS
+// to ctx: when ctx is done they stop accepting connections, give in-flight
+// requests up to the shutdown timeout to finish, and the Listen call returns.
+// A context that is already done makes Listen return at once. Without a
+// context the servers run until the process ends.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) Context(ctx context.Context) *Router {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	r.ctx = ctx
+	return r
+}
+
+// ShutdownTimeout sets how long in-flight requests get to finish once the
+// router's context is done. The default is DefaultShutdownTimeout.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) ShutdownTimeout(timeout time.Duration) *Router {
+	r.shutdownTimeout = timeout
+	return r
+}
+
+// OnListen registers a function called with the actual address once a server
+// is listening and before it serves requests: useful to open a browser, to
+// learn the port chosen for ":0", or to signal readiness. It is not called
+// when the address cannot be used. ListenWithTLS calls it once per server.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) OnListen(fn OnListenFn) *Router {
+	r.onListen = fn
+	return r
+}
+
 // DocViewer registers a documentation viewer responsible for exposing
 // documentation endpoints.
 //
@@ -138,7 +201,7 @@ func (r *Router) Logger(logger log.Log) *Router {
 func (r *Router) DocViewer(viewer docs.IDocViewer) *Router {
 	for _, v := range viewer.Handlers() {
 		pattern := fmt.Sprintf("%s %s", v.Method, v.Route)
-		http.HandleFunc(pattern, v.Handler)
+		r.server.HandleFunc(pattern, v.Handler)
 	}
 	r.docViewer = viewer
 	return r
@@ -164,7 +227,7 @@ func (r *Router) BasePath(basePath string) *Router {
 func (r *Router) ResourcesPath(path string) *Router {
 	fs := http.FileServer(http.Dir(path))
 	route := fmt.Sprintf("/%s/", path)
-	http.Handle(fmt.Sprintf("GET %s", route), http.StripPrefix(route, fs))
+	r.server.Handle(fmt.Sprintf("GET %s", route), http.StripPrefix(route, fs))
 	return r
 }
 
@@ -317,7 +380,7 @@ func (r *Router) route(method string, pattern string, options *HandlerOptions, d
 	}
 
 	r.routes.Put(route, options.handler)
-	http.HandleFunc(route, r.handler)
+	r.server.HandleFunc(route, r.handler)
 
 	doc.Method = method
 	doc.BasePath = r.basePath
