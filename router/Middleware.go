@@ -52,11 +52,17 @@ func httpsRedirectMiddleware(hostTLS int) middleware {
 		}
 
 		host := req.Host
-		if colon := strings.Index(host, ":"); colon != -1 {
-			host = host[:colon]
+		if h, _, err := net.SplitHostPort(req.Host); err == nil {
+			host = h
 		}
-		url := fmt.Sprintf("https://%s%s%s", host, portTLS, req.RequestURI)
-		http.Redirect(w, req, url, http.StatusMovedPermanently)
+
+		target := host
+		if portTLS != "" && portTLS != "443" {
+			target = net.JoinHostPort(host, portTLS)
+		}
+
+		url := fmt.Sprintf("https://%s%s", target, req.URL.RequestURI())
+		http.Redirect(w, req, url, http.StatusPermanentRedirect)
 
 		return true
 	}
