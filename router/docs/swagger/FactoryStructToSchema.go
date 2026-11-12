@@ -57,7 +57,7 @@ func (f *FactoryStructToSchema) Components() *Components {
 // - If the payload is a slice/array, it wraps the item schema in an "array" type.
 func (f *FactoryStructToSchema) MakeSchema(media docs.MediaType, root any) (*Schema, error) {
 	t := reflect.TypeOf(root)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -130,9 +130,7 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 
 	schema := NewSchema()
 
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-
+	for field := range t.Fields() {
 		if field.Anonymous || f.isMiscField(field) {
 			continue
 		}
@@ -168,7 +166,7 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 }
 
 func (f *FactoryStructToSchema) isMiscField(field reflect.StructField) bool {
-	return field.Type == reflect.TypeOf(xml.Name{})
+	return field.Type == reflect.TypeFor[xml.Name]()
 }
 
 func (f *FactoryStructToSchema) addProperty(schema *Schema, name string, property *Schema, isRequired bool) *Schema {
@@ -247,7 +245,7 @@ func (f *FactoryStructToSchema) defineXmlName(name string, ref *Schema, attribut
 }
 
 func (f *FactoryStructToSchema) canBeRequired(field reflect.StructField) bool {
-	return field.Type.Kind() != reflect.Ptr &&
+	return field.Type.Kind() != reflect.Pointer &&
 		field.Type.Kind() != reflect.Slice &&
 		field.Type.Kind() != reflect.Map
 }
@@ -324,7 +322,9 @@ func (f *FactoryStructToSchema) inferMap(media docs.MediaType, fieldType reflect
 }
 
 func (f *FactoryStructToSchema) deferencePointer(t reflect.Type) reflect.Type {
-	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+	for t.Kind() == reflect.Pointer ||
+		t.Kind() == reflect.Slice ||
+		t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	return t
@@ -350,12 +350,10 @@ func (f *FactoryStructToSchema) makeStructName(media docs.MediaType, t reflect.T
 }
 
 func (f *FactoryStructToSchema) hasXmlRoot(t reflect.Type) (string, bool) {
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-
-		if field.Type == reflect.TypeOf(xml.Name{}) {
+	for field := range t.Fields() {
+		if field.Type == reflect.TypeFor[xml.Name]() {
 			attribute := field.Tag.Get("xml")
-			tag := strings.Split(attribute, ",")[0]
+			tag, _, _ := strings.Cut(attribute, ",")
 			return tag, tag != "" && tag != "-"
 		}
 	}
