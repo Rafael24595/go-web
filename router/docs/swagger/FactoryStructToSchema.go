@@ -253,13 +253,15 @@ func (f *FactoryStructToSchema) canBeRequired(field reflect.StructField) bool {
 }
 
 func (f *FactoryStructToSchema) inferSchema(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+	for fieldType.Kind() == reflect.Pointer {
+		fieldType = fieldType.Elem()
+	}
+
 	if schema, ok := f.types[fieldType]; ok {
 		return &schema, nil
 	}
 
 	switch fieldType.Kind() {
-	case reflect.Ptr:
-		return f.inferSchema(media, fieldType.Elem())
 	case reflect.Struct:
 		return f.inferStruct(media, fieldType)
 	case reflect.Slice, reflect.Array:
