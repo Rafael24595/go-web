@@ -14,12 +14,15 @@ import (
 	"github.com/Rafael24595/go-web/router/result"
 )
 
+const (
+	// Base is the key used to register global handlers (contextualizer, error, panic)
+	Base = "$BASE"
+)
+
 type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
 type RequestHandler = func(http.ResponseWriter, *http.Request, *Context) result.Result
 type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
-
-const BASE = "$BASE"
 
 // HandlerOptions represents advanced configuration for a route handler.
 //
@@ -172,7 +175,7 @@ func (r *Router) ResourcesPath(path string) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) Contextualizer(handler contextHandler) *Router {
-	r.contextualizer.Put(BASE, handler)
+	r.contextualizer.Put(Base, handler)
 	return r
 }
 
@@ -221,7 +224,7 @@ func (r *Router) GroupContextualizerDocument(handler RequestHandler, doc docs.Do
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) ErrorHandler(handler errorHandler) *Router {
-	r.errors.Put(BASE, handler)
+	r.errors.Put(Base, handler)
 	return r
 }
 
@@ -235,7 +238,7 @@ func (r *Router) ErrorHandler(handler errorHandler) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) PanicHandler(handler panicHandler) *Router {
-	r.panics.Put(BASE, handler)
+	r.panics.Put(Base, handler)
 	return r
 }
 
@@ -485,7 +488,7 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (*Context, *result.Result) {
 	contextualizer, ok := r.contextualizer.Get(req.Pattern)
 	if !ok {
-		contextualizer, ok = r.contextualizer.Get(BASE)
+		contextualizer, ok = r.contextualizer.Get(Base)
 	}
 
 	var ctx *Context
@@ -557,7 +560,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *Context, result result.Result) {
 	errorHandler, ok := r.errors.Get(req.Pattern)
 	if !ok {
-		errorHandler, ok = r.errors.Get(BASE)
+		errorHandler, ok = r.errors.Get(Base)
 	}
 
 	if ok {
@@ -571,7 +574,7 @@ func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *
 func (r *Router) managePanic(wrt http.ResponseWriter, req *http.Request, rec any) {
 	panicHandler, ok := r.panics.Get(req.Pattern)
 	if !ok {
-		panicHandler, ok = r.panics.Get(BASE)
+		panicHandler, ok = r.panics.Get(Base)
 	}
 
 	if ok {
