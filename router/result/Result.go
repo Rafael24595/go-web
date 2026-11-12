@@ -183,7 +183,7 @@ func TextErr(status int, message string) Result {
 func JsonErr(status int, payload any) Result {
 	return Result{
 		ignore:  false,
-		isOk:    true,
+		isOk:    false,
 		isFile:  false,
 		status:  status,
 		payload: payload,
@@ -195,7 +195,7 @@ func JsonErr(status int, payload any) Result {
 func XmlErr(status int, payload any) Result {
 	return Result{
 		ignore:  false,
-		isOk:    true,
+		isOk:    false,
 		isFile:  false,
 		status:  status,
 		payload: payload,
@@ -207,7 +207,7 @@ func XmlErr(status int, payload any) Result {
 func CustomErr(status int, payload any, encoder ResultEncoder) Result {
 	return Result{
 		ignore:  false,
-		isOk:    true,
+		isOk:    false,
 		status:  status,
 		payload: payload,
 		encoder: encoder,
