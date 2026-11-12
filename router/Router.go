@@ -108,6 +108,7 @@ func NewRouter() *Router {
 		contextualizer:       collection.DictionaryEmpty[string, contextHandler](),
 		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[RequestHandler]](),
 		errors:               collection.DictionaryEmpty[string, errorHandler](),
+		panics:               collection.DictionaryEmpty[string, panicHandler](),
 		routes:               collection.DictionaryEmpty[string, RequestHandler](),
 		basePath:             "",
 		cors:                 EmptyCors(),
