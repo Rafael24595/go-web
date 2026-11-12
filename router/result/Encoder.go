@@ -92,7 +92,7 @@ func (e *textEncoder) Encode(payload any) ([]byte, error) {
 	switch t.Kind() {
 	case reflect.String:
 		return []byte(payload.(string)), nil
-	case reflect.Ptr, reflect.Struct, reflect.Map, reflect.Array, reflect.Slice:
+	case reflect.Pointer, reflect.Struct, reflect.Map, reflect.Array, reflect.Slice:
 		return NewJsonEncoder().Encode(payload)
 	default:
 		payloadStr := fmt.Sprintf("%v", payload)
