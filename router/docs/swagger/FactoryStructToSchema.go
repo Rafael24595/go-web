@@ -131,7 +131,7 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 	schema := NewSchema()
 
 	for field := range t.Fields() {
-		if field.Anonymous || f.isMiscField(field) {
+		if field.Anonymous || !field.IsExported() || f.isMiscField(field) {
 			continue
 		}
 
