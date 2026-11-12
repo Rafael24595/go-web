@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -71,6 +71,17 @@ func (v *OpenAPI3Viewer) Load(options ...OpenAPI3ViewerOption) error {
 	v.data = *data
 
 	return nil
+}
+
+// DefineType documents every value of type t with schema instead of inferring
+// it from its fields: for types that encode themselves (uuid.UUID, a decimal)
+// or whose encoding has a format OpenAPI names. time.Time is defined as a
+// date-time string. Call it before the routes are registered.
+//
+// Returns the viewer itself for fluent configuration.
+func (v *OpenAPI3Viewer) DefineType(t reflect.Type, schema Schema) *OpenAPI3Viewer {
+	v.factory.DefineType(t, schema)
+	return v
 }
 
 // RegisterGroup registers shared documentation (headers, cookies, responses)

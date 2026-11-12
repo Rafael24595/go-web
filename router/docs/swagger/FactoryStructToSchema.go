@@ -20,14 +20,23 @@ type seen struct {
 // FactoryStructToSchema builds OpenAPI 3.0 schema definitions from Go structs.
 // It uses reflection to walk struct fields, inspect tags, and generate JSON/XML schemas.
 type FactoryStructToSchema struct {
-	seen map[reflect.Type]map[docs.MediaType]seen
+	seen  map[reflect.Type]map[docs.MediaType]seen
+	types map[reflect.Type]Schema
 }
 
 // NewFactoryStructToSchema creates a new factory instance.
 func NewFactoryStructToSchema() *FactoryStructToSchema {
 	return &FactoryStructToSchema{
-		seen: make(map[reflect.Type]map[docs.MediaType]seen),
+		seen:  make(map[reflect.Type]map[docs.MediaType]seen),
+		types: make(map[reflect.Type]Schema),
 	}
+}
+
+// DefineType documents every value of type t with schema instead of inferring
+// it; it replaces any earlier definition of t, the built-in ones included.
+func (f *FactoryStructToSchema) DefineType(t reflect.Type, schema Schema) *FactoryStructToSchema {
+	f.types[t] = schema
+	return f
 }
 
 // Components returns all schemas collected so far as OpenAPI components.
@@ -244,6 +253,10 @@ func (f *FactoryStructToSchema) canBeRequired(field reflect.StructField) bool {
 }
 
 func (f *FactoryStructToSchema) inferSchema(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+	if schema, ok := f.types[fieldType]; ok {
+		return &schema, nil
+	}
+
 	switch fieldType.Kind() {
 	case reflect.Ptr:
 		return f.inferSchema(media, fieldType.Elem())
