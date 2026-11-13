@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Rafael24595/go-assert/invariant"
 	"github.com/Rafael24595/go-collections/collection"
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-log/log/record"
@@ -44,62 +45,6 @@ type OnListenFn func(net.Addr)
 // ErrTLSStrategyRequired is returned by ListenTLS and ListenWithTLS when the
 // TLS strategy is nil.
 var ErrTLSStrategyRequired = errors.New("router: a TLS strategy is required")
-
-// HandlerOptions represents advanced configuration for a route handler.
-//
-// It allows attaching optional handlers for:
-//   - request context initialization
-//   - error handling
-//   - panic recovery
-//
-// Use NewHandlerOptions to create a new instance, and the builder-style
-// methods (Context, Error, Panic) to configure it.
-type HandlerOptions struct {
-	handler RequestHandler
-	context *contextHandler
-	error   *errorHandler
-	panic   *panicHandler
-}
-
-// NewHandlerOptions creates a new HandlerOptions instance for the given
-// route handler. By default, no context, error, or panic handlers are set.
-func NewHandlerOptions(handler RequestHandler) *HandlerOptions {
-	return &HandlerOptions{
-		handler: handler,
-	}
-}
-
-// Context sets a context initializer for the handler.
-//
-// The contextualizer runs before the route logic and can build a request-
-// scoped context dictionary (e.g., user info, DB connections, metadata).
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Context(context *contextHandler) *HandlerOptions {
-	h.context = context
-	return h
-}
-
-// Error sets a custom error handler for the route.
-//
-// The error handler runs when the route handler returns an error or fails.
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Error(error *errorHandler) *HandlerOptions {
-	h.error = error
-	return h
-}
-
-// Panic sets a custom panic handler for the route.
-//
-// The panic handler is called if the route panics during execution.
-// This allows fine-grained recovery logic for individual routes.
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Panic(panic *panicHandler) *HandlerOptions {
-	h.panic = panic
-	return h
-}
 
 // Router is the main entry point for defining and running HTTP routes.
 //
@@ -328,87 +273,65 @@ func (r *Router) PanicHandler(handler panicHandler) *Router {
 	return r
 }
 
-// Route registers a basic route with default handler options.
-//
-// This is a shorthand for RouteWithOptions where only the handler is provided.
-// Use this when you don’t need documentation or advanced configuration.
+// Route registers a route; params fill the %s verbs of the pattern. The route
+// is served but left out of the documentation viewer: use RouteDocument, or
+// RouteWithOptions with WithDocs, to document it.
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) Route(method string, handler RequestHandler, pattern string, params ...any) *Router {
-	return r.RouteWithOptions(method, NewHandlerOptions(handler), pattern, params...)
+	return r.RouteWithOptions(method, handler, pattern, WithParams(params...))
 }
 
-// RouteWithOptions registers a basic route with advanced handler options.
-//
-// Use this when you need to configure context, error, or panic handling
-// at the route level, without attaching documentation.
-//
-// Returns the Router itself for fluent configuration.
-func (r *Router) RouteWithOptions(method string, options *HandlerOptions, pattern string, params ...any) *Router {
-	return r.route(method, pattern, options, docs.DocOperation{}, params...)
-}
-
-// RouteDocument registers a documented route with default handler options.
-//
-// This is a shorthand for RouteDocumentWithOptions where only the handler
-// is provided. Use this when you don’t need custom context, error, or panic
-// handlers.
+// RouteDocument registers a route and documents it; it is a shorthand for
+// RouteWithOptions with WithDocs.
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) RouteDocument(method string, handler RequestHandler, pattern string, doc docs.DocRoute) *Router {
-	return r.RouteDocumentWithOptions(method, NewHandlerOptions(handler), pattern, doc)
+	return r.RouteWithOptions(method, handler, pattern, WithDocs(doc))
 }
 
-// RouteDocumentWithOptions registers a documented route with advanced handler options.
+// RouteWithOptions registers a route configured by options: its parameters
+// (WithParams), its own contextualizer, error or panic handler (WithContext,
+// WithError, WithPanic) and its documentation (WithDocs).
 //
-// The documentation payload describes request parameters, queries, cookies,
-// file uploads, request body, and possible responses. HandlerOptions may
-// define custom context, error, or panic behavior for this route.
+// A nil handler is a programming error: debug builds panic, release builds
+// skip the route.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) RouteDocumentWithOptions(method string, options *HandlerOptions, pattern string, doc docs.DocRoute) *Router {
-	params := make([]any, 0)
-	for _, p := range doc.Parameters {
-		params = append(params, p.Code)
+func (r *Router) RouteWithOptions(method string, handler RequestHandler, pattern string, options ...RouteOption) *Router {
+	if handler == nil {
+		invariant.Unreachable(
+			fmt.Sprintf("router: nil handler for %s %s", method, pattern),
+		)
+		return r
 	}
 
-	docRoute := docs.DocOperation{
-		Description: doc.Description,
-		Parameters:  doc.Parameters,
-		Query:       doc.Query,
-		Cookies:     doc.Cookies,
-		Files:       doc.Files,
-		Request:     doc.Request,
-		Responses:   doc.Responses,
-		Tags:        doc.Tags,
+	routeSpec := routeSpec{
+		method:  method,
+		pattern: pattern,
 	}
 
-	return r.route(method, pattern, options, docRoute, params...)
-}
-
-func (r *Router) route(method string, pattern string, options *HandlerOptions, doc docs.DocOperation, params ...any) *Router {
-	route := r.patternKey(method, pattern, params...)
-
-	if options != nil && options.context != nil {
-		r.contextualizer.Put(route, *options.context)
+	for _, option := range options {
+		if option.resolve != nil {
+			option.resolve(&routeSpec)
+		}
 	}
 
-	if options != nil && options.error != nil {
-		r.errors.Put(route, *options.error)
-	}
+	route := r.patternKey(routeSpec.method, routeSpec.pattern, routeSpec.params...)
 
-	if options != nil && options.panic != nil {
-		r.panics.Put(route, *options.panic)
-	}
-
-	r.routes.Put(route, options.handler)
+	r.routes.Put(route, handler)
 	r.server.HandleFunc(route, r.handler)
 
-	doc.Method = method
-	doc.BasePath = r.basePath
-	doc.Path = fmt.Sprintf(pattern, params...)
+	resultSpec := resultSpec{
+		route:     route,
+		routeSpec: routeSpec,
+	}
 
-	r.docViewer.RegisterRoute(doc)
+	for _, option := range options {
+		if option.register != nil {
+			option.register(r, resultSpec)
+		}
+	}
 
 	return r
 }

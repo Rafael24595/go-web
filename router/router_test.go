@@ -8,6 +8,7 @@ import (
 
 	"github.com/Rafael24595/go-assert/assert"
 	"github.com/Rafael24595/go-assert/require"
+	"github.com/Rafael24595/go-web/router/docs"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
@@ -46,6 +47,16 @@ func boom(w http.ResponseWriter, req *http.Request, ctx *Context) result.Result 
 
 func bad(w http.ResponseWriter, req *http.Request, ctx *Context) result.Result {
 	return result.TextErr(http.StatusBadRequest, "bad input")
+}
+
+type recordingViewer struct {
+	docs.IDocViewer
+	routes []string
+}
+
+func (v *recordingViewer) RegisterRoute(route docs.DocOperation) docs.IDocViewer {
+	v.routes = append(v.routes, route.Method+" "+route.Path)
+	return v
 }
 
 func TestNormalizeAddr(t *testing.T) {
@@ -419,4 +430,59 @@ func TestRouterUse(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, recorder.Code)
 		assertHeader(t, recorder, "Access-Control-Allow-Origin", origin)
 	})
+}
+
+func TestRouteWithOptions_OnlyDocumentedRoutesReachTheViewer(t *testing.T) {
+	viewer := &recordingViewer{IDocViewer: docs.VoidViewer()}
+	id := docs.DocOrderParameters{docs.Parameter("id", "an id")}
+
+	NewRouterWithMux(nil).
+		DocViewer(viewer).
+		Route(http.MethodGet, text("ok"), "/plain").
+		RouteWithOptions(http.MethodGet, text("ok"), "/options", WithPanic(nil)).
+		RouteDocument(http.MethodGet, text("ok"), "/documented", docs.DocRoute{}).
+		RouteWithOptions(http.MethodGet, text("ok"), "/documented/{%s}", WithDocs(docs.DocRoute{Parameters: id}))
+
+	assert.DeepEqual(t, []string{"GET /documented", "GET /documented/{id}"}, viewer.routes)
+}
+
+func TestRouteWithOptions_Params(t *testing.T) {
+	router := NewRouterWithMux(nil).
+		RouteWithOptions(http.MethodGet, text("item"), "/%s/{%s}", WithParams("items", "id"))
+
+	res, body := get(t, serve(t, router).URL+"/items/42")
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "item", body)
+}
+
+func TestRouteWithOptions_HandlersOfTheRoute(t *testing.T) {
+	routeError := func(w http.ResponseWriter, req *http.Request, ctx *Context, res result.Result) {
+		http.Error(w, "route error", http.StatusTeapot)
+	}
+
+	routePanic := func(w http.ResponseWriter, req *http.Request, rec any) {
+		http.Error(w, "route panic", http.StatusServiceUnavailable)
+	}
+
+	globalError := func(w http.ResponseWriter, req *http.Request, ctx *Context, res result.Result) {
+		http.Error(w, "global error", http.StatusInternalServerError)
+	}
+
+	router := NewRouterWithMux(nil).
+		ErrorHandler(globalError).
+		RouteWithOptions(http.MethodGet, bad, "/own-error", WithError(routeError)).
+		RouteWithOptions(http.MethodGet, boom, "/own-panic", WithPanic(routePanic)).
+		Route(http.MethodGet, bad, "/global-error")
+
+	server := serve(t, router)
+
+	res, _ := get(t, server.URL+"/own-error")
+	assert.Equal(t, http.StatusTeapot, res.StatusCode)
+
+	res, _ = get(t, server.URL+"/own-panic")
+	assert.Equal(t, http.StatusServiceUnavailable, res.StatusCode)
+
+	res, _ = get(t, server.URL+"/global-error")
+	assert.Equal(t, http.StatusInternalServerError, res.StatusCode, "other routes keep the global handler")
 }
