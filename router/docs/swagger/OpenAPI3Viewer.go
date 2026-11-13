@@ -26,7 +26,7 @@ type OpenAPI3Viewer struct {
 	build      sync.Once
 	logger     log.Log
 	data       OpenAPI3
-	factory    *FactoryStructToSchema
+	factory    *schemaFactory
 	headers    map[string]map[string]string
 	cookies    map[string]map[string]string
 	responses  map[string]map[string]Response
@@ -38,7 +38,7 @@ func NewViewer() *OpenAPI3Viewer {
 	return &OpenAPI3Viewer{
 		data:       OpenAPI3{},
 		logger:     log.Default(),
-		factory:    NewFactoryStructToSchema(),
+		factory:    newSchemaFactory(),
 		headers:    make(map[string]map[string]string),
 		cookies:    make(map[string]map[string]string),
 		responses:  make(map[string]map[string]Response),
@@ -75,12 +75,12 @@ func (v *OpenAPI3Viewer) Load(options ...OpenAPI3ViewerOption) error {
 
 // DefineType documents every value of type t with schema instead of inferring
 // it from its fields: for types that encode themselves (uuid.UUID, a decimal)
-// or whose encoding has a format OpenAPI names. time.Time is defined as a
-// date-time string. Call it before the routes are registered.
+// or whose encoding has a format OpenAPI names.
+// Call it before the routes are registered.
 //
 // Returns the viewer itself for fluent configuration.
 func (v *OpenAPI3Viewer) DefineType(t reflect.Type, schema Schema) *OpenAPI3Viewer {
-	v.factory.DefineType(t, schema)
+	v.factory.defineType(t, schema)
 	return v
 }
 
@@ -160,7 +160,7 @@ func (v *OpenAPI3Viewer) Handlers() []docs.DocViewerHandler {
 
 func (v *OpenAPI3Viewer) doc(w http.ResponseWriter, r *http.Request) {
 	v.build.Do(func() {
-		v.data.Components = *v.factory.Components()
+		v.data.Components = *v.factory.components()
 		data, err := json.Marshal(v.data)
 		if err != nil {
 			v.logger.Error(err)
@@ -302,7 +302,7 @@ func (v *OpenAPI3Viewer) makeMainRequest(route docs.DocOperation) (docs.MediaTyp
 		return "", nil
 	}
 
-	main, err := v.factory.MakeSchema(route.Request.MediaType, route.Request.Payload)
+	main, err := v.factory.makeSchema(route.Request.MediaType, route.Request.Payload)
 	if err != nil {
 		v.logger.Error(err)
 		return "", nil
@@ -359,7 +359,7 @@ func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs
 
 	result := make(map[string]Response)
 	for status, response := range responses {
-		main, err := v.factory.MakeSchema(response.MediaType, response.Payload)
+		main, err := v.factory.makeSchema(response.MediaType, response.Payload)
 		if err != nil {
 			v.logger.Error(err)
 			return nil

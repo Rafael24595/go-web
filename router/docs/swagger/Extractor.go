@@ -14,7 +14,7 @@ import (
 type structExtractor func(t reflect.Type) structInfo
 
 type structInfo struct {
-	mediaName string
+	component string
 	xml       *XML
 }
 
@@ -24,7 +24,7 @@ func plainStructExtractor(format string) structExtractor {
 		mediaName := makeStructName(format, t.PkgPath(), name)
 
 		return structInfo{
-			mediaName: mediaName,
+			component: mediaName,
 		}
 	}
 }
@@ -58,13 +58,17 @@ func makeStructName(format, pkg, name string) string {
 	return fmt.Sprintf("%s_%s_%s", mediaFormat, pkgFormat, nameFormat)
 }
 
-func xmlStructExtractor(format string) structExtractor {
-	plainExtractor := plainStructExtractor(format)
+func jsonStructExtractor() structExtractor {
+	return plainStructExtractor("json")
+}
+
+func xmlStructExtractor() structExtractor {
+	plainExtractor := plainStructExtractor("xml")
 	return func(t reflect.Type) structInfo {
 		info := plainExtractor(t)
 
 		name := structName(t)
-		if root, ok := hasXmlRoot(t); ok {
+		if root, ok := xmlRootName(t); ok {
 			name = root
 		}
 
@@ -77,7 +81,7 @@ func xmlStructExtractor(format string) structExtractor {
 	}
 }
 
-func hasXmlRoot(t reflect.Type) (string, bool) {
+func xmlRootName(t reflect.Type) (string, bool) {
 	for field := range t.Fields() {
 		if field.Type != reflect.TypeFor[xml.Name]() {
 			continue
@@ -94,7 +98,7 @@ func hasXmlRoot(t reflect.Type) (string, bool) {
 
 type fieldInfo struct {
 	ignore    bool
-	tag       string
+	name      string
 	omitempty bool
 	decorate  fieldDecorator
 }
@@ -102,7 +106,7 @@ type fieldInfo struct {
 type fieldExtractor func(reflect.StructField) fieldInfo
 
 func jsonFieldExtractor(field reflect.StructField) fieldInfo {
-	name, options, ignore := tagParts(field, "json")
+	name, options, ignore := parseTag(field, "json")
 	if ignore {
 		return fieldInfo{ignore: true}
 	}
@@ -111,9 +115,9 @@ func jsonFieldExtractor(field reflect.StructField) fieldInfo {
 		slices.Contains(options, "omitzero")
 
 	return fieldInfo{
-		tag:       name,
+		name:      name,
 		omitempty: omitEmpty,
-		decorate:  voidFieldDecorator,
+		decorate:  identityDecorator,
 	}
 }
 
@@ -122,7 +126,7 @@ func xmlFieldExtractor(field reflect.StructField) fieldInfo {
 		return fieldInfo{ignore: true}
 	}
 
-	name, options, ignore := tagParts(field, "xml")
+	name, options, ignore := parseTag(field, "xml")
 	if ignore {
 		return fieldInfo{ignore: true}
 	}
@@ -137,13 +141,13 @@ func xmlFieldExtractor(field reflect.StructField) fieldInfo {
 	decorator := xmlFieldDecorator(name, wrapper, options)
 
 	return fieldInfo{
-		tag:       name,
+		name:      name,
 		omitempty: omitEmpty,
 		decorate:  decorator,
 	}
 }
 
-func defineXmlFieldName(name string, ref *Schema, attribute bool) *Schema {
+func withXmlName(name string, ref *Schema, attribute bool) *Schema {
 	if ref.Ref != "" {
 		refVal := ref.Ref
 		ref.Ref = ""
@@ -161,7 +165,7 @@ func defineXmlFieldName(name string, ref *Schema, attribute bool) *Schema {
 	return ref
 }
 
-func tagParts(field reflect.StructField, key string) (name string, options []string, ignore bool) {
+func parseTag(field reflect.StructField, key string) (name string, options []string, ignore bool) {
 	value := field.Tag.Get(key)
 	if value == "-" {
 		return "", nil, true
@@ -181,7 +185,7 @@ func tagParts(field reflect.StructField, key string) (name string, options []str
 
 type fieldDecorator func(*Schema) *Schema
 
-func voidFieldDecorator(ref *Schema) *Schema {
+func identityDecorator(ref *Schema) *Schema {
 	return ref
 }
 
@@ -189,9 +193,9 @@ func xmlFieldDecorator(name, wrapper string, options []string) fieldDecorator {
 	return func(ref *Schema) *Schema {
 		if wrapper != "" {
 			if ref.Items != nil {
-				ref.Items = defineXmlFieldName(wrapper, ref.Items, false)
+				ref.Items = withXmlName(wrapper, ref.Items, false)
 			} else {
-				ref = defineXmlFieldName(wrapper, ref, false)
+				ref = withXmlName(wrapper, ref, false)
 			}
 
 			ref = &Schema{
@@ -203,6 +207,6 @@ func xmlFieldDecorator(name, wrapper string, options []string) fieldDecorator {
 		}
 
 		attribute := slices.Contains(options, "attr")
-		return defineXmlFieldName(name, ref, attribute)
+		return withXmlName(name, ref, attribute)
 	}
 }
