@@ -98,11 +98,6 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 		}
 	}
 
-	f.seen[t][media] = seen{
-		ref:    ref,
-		name:   mediaName,
-		schema: *schema,
-	}
 
 	f.putSeen(t, media, seen{
 		ref:    ref,
