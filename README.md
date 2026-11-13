@@ -79,13 +79,25 @@ err := router.NewRouter().
 	Listen("127.0.0.1:0") // port 0: OnListen tells which one was chosen
 ```
 
-For tests (`httptest.NewServer`) or to mount the router inside a server of your own, `Handler()` returns it as an `http.Handler` with CORS applied.
+For tests (`httptest.NewServer`) or to mount the router inside a server of your own, `Handler()` returns it as an `http.Handler`, with CORS and the middlewares added with `Use` applied.
+
+#### 1.0.1 Middlewares
+
+`Use` wraps every route served by `Listen`, `ListenTLS`, `ListenWithTLS` and `Handler` with standard `func(http.Handler) http.Handler` middlewares. The first one added is the outermost:
+
+```go
+route.Use(requestLog, hostCheck)
+```
+
+They run after the built-in CORS handling: preflight requests are answered before reaching them, and their responses (a `403` from a Host check, for instance) already carry the CORS headers. They are not applied to the HTTP-to-HTTPS redirect server of `ListenWithTLS`.
 
 #### 1.1 Basic route
 
 ```go
 route.Route("GET", handler, "/hello")
 ```
+
+Routes registered with `Route` are served but not documented; see 1.4.
 
 #### 1.2 With parameters
 
@@ -97,14 +109,18 @@ route.Route("GET", handler, "/hello/{%s}", PLACE)
 
 #### 1.3 With options
 
-```go
-options := router.NewHandlerOptions(handler).
-    Context(ctxHandler).
-    Error(errHandler).
-    Panic(panicHandler)
+`RouteWithOptions` takes `RouteOption`s that configure the route as it is registered:
 
-route.RouteWithOptions("GET", options, "/secure")
+```go
+route.RouteWithOptions("GET", handler, "/users/{%s}",
+    router.WithParams(USER),        // fills the %s verbs of the pattern
+    router.WithContext(ctxHandler), // instead of the global contextualizer
+    router.WithError(errHandler),   // instead of the global error handler
+    router.WithPanic(panicHandler), // instead of the global panic handler
+)
 ```
+
+A nil handler is a programming error: builds with the `g_ast_dbg` tag panic, the rest skip the route (see go-assert's `invariant`).
 
 #### 1.4 With documentation
 
@@ -130,8 +146,13 @@ route.RouteDocument("GET", handler, "/hello/{%s}", doc)
 #### 1.5 With documentation and options
 
 ```go
-route.RouteDocumentWithOptions("GET", options, "/secure", doc)
+route.RouteWithOptions("GET", handler, "/hello/{%s}",
+    router.WithDocs(doc),
+    router.WithError(errHandler),
+)
 ```
+
+`RouteDocument(method, handler, pattern, doc)` is a shorthand for `RouteWithOptions` with `WithDocs(doc)`. The parameters of the documentation fill the `%s` verbs of the pattern.
 
 #### 1.6 Context handler
 
@@ -605,28 +626,41 @@ type IDocViewer interface {
 
 #### 5.2 Swagger Viewer
 
-The `swagger` package provides an implementation of IDocViewer for OpenAPI 3.0.
+The `swagger` package provides an implementation of `IDocViewer` for OpenAPI 3.0. It serves Swagger UI at `/swagger/` and the definition at `/swagger/doc.json`.
 
 ```go
-route := router.NewRouter()
+viewer := swagger.NewViewer()
 
-options := swagger.OpenAPI3ViewerOptions{
-    Version:   "v1.0.0",
-    EnableTLS: true,
-    OnlyTLS:   false,
-    Port:      8080,
-    PortTLS:   8081,
-    FileYML:   "swagger.yaml",
+err := viewer.Load(
+    swagger.WithYAMLFile("swagger.yaml"), // a base definition: info, tags...
+    func(d *swagger.OpenAPI3) error {     // or any field, set in code
+        d.Info.Version = version
+        return nil
+    },
+)
+
+if err != nil {
+    return err
 }
 
-viewer := swagger.NewViewer()
-viewer.Logger(customLog)
-viewer.Load(options)
+viewer.DefineType(
+    reflect.TypeFor[time.Time](),
+    swagger.Schema{Type: "string", Format: "date-time"},
+)
 
-route.DocViewer(viewer)
+route := router.NewRouter().DocViewer(viewer) // before the routes: they register themselves in it
 ```
 
-If a Swagger file path is provided in the options, it will be loaded as the base OpenAPI definition. You can then override or extend it using the given options.
+`Load` starts from an empty OpenAPI 3.0.0 definition and applies the options in order; when one fails, it returns its error and leaves the viewer unchanged. `WithYAML` takes the YAML content (from `go:embed`, for instance) and `WithYAMLFile` a path; only the fields present in the YAML are set. An `OpenAPI3ViewerOption` is a plain `func(*swagger.OpenAPI3) error`. The only server listed is `/`, the one serving the definition.
+
+Schemas are generated from the payload types, the way `encoding/json` and `encoding/xml` write them:
+
+- Names, `omitempty` and `omitzero` come from the `json`/`xml` tags; `-` hides a field and unexported fields are left out. The `description` tag becomes the field's description.
+- A struct becomes a component (`Json_<package>_<Type>`) referenced with `$ref`; slices, arrays and maps are described inline. Two types that would get the same name get a counter (`_2`).
+- A type with its own `MarshalJSON`/`MarshalXML` is described as any value, one with `MarshalText` as a string, and `[]byte` as base64 (JSON) or plain text (XML).
+- `DefineType` replaces what would be inferred for a type, for types that encode themselves (`time.Time`, `uuid.UUID`, a decimal). Call it before the routes are registered.
+
+Only routes registered with `RouteDocument` or `WithDocs` are documented.
 
 #### 5.3 No-op viewer
 
@@ -693,18 +727,16 @@ func main() {
     route := router.NewRouter()
     route.Logger(customLog)
 
-    options := swagger.OpenAPI3ViewerOptions{
-        Version:   "v1.0.0",
-        EnableTLS: true,
-        OnlyTLS:   false,
-        Port:      8080,
-        PortTLS:   8081,
-        FileYML:   "swagger.yaml",
-    }
-
     viewer := swagger.NewViewer()
     viewer.Logger(customLog)
-    viewer.Load(options)
+
+    err := viewer.Load(
+        swagger.WithYAMLFile("swagger.yaml"),
+    )
+
+    if err != nil {
+        log.Fatal(err)
+    }
 
     route.DocViewer(viewer)
 
@@ -723,8 +755,8 @@ func main() {
 
     doc := docs.DocRoute{
         Description: "description",
-        Parameters: docs.DocParameters{
-            PLACE: PLACE_DESC,
+        Parameters: docs.DocOrderParameters{
+            docs.Parameter(PLACE, PLACE_DESC),
         },
         Request: docs.DocJsonPayload[DtoPlace](),
         Responses: docs.DocResponses{
@@ -754,6 +786,12 @@ func main() {
 - `JsonErr`, `XmlErr` and `CustomErr` are now errors: they stop group contextualizers and reach the `ErrorHandler`.
 - Plain-text responses carry `charset=utf-8`, and text errors no longer end with a newline.
 - Requires Go 1.27.
+- `Use` is new: standard middlewares around every route.
+- `RouteWithOptions(method, handler, pattern, options...)` takes `RouteOption`s (`WithParams`, `WithContext`, `WithError`, `WithPanic`, `WithDocs`); `HandlerOptions`, `NewHandlerOptions` and `RouteDocumentWithOptions` are gone.
+- Routes registered with `Route` no longer appear in the documentation.
+- A nil handler panics in `g_ast_dbg` builds and skips the route in the rest.
+- The Swagger viewer: `OpenAPI3ViewerOptions` is gone; `Load` takes `OpenAPI3ViewerOption`s (`WithYAML`, `WithYAMLFile` or your own) and returns an error. `DefineType` is new.
+- Schemas follow the encoders: unexported fields and `json:"-"` are left out, `omitzero` makes a field optional, types with their own marshaler and `[]byte` are described as they are written, top-level slices and maps are described as such, and component names no longer collide.
 
 ---
 
