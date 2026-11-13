@@ -51,6 +51,10 @@ func makeStructName(format, pkg, name string) string {
 		nameFormat = caser.String(nameFormat)
 	}
 
+	if pkgFormat == "" {
+		return fmt.Sprintf("%s_%s", mediaFormat, nameFormat)
+	}
+
 	return fmt.Sprintf("%s_%s_%s", mediaFormat, pkgFormat, nameFormat)
 }
 
