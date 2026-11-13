@@ -527,7 +527,12 @@ func (r *Router) run(ctx context.Context, server *http.Server, strategy serveStr
 
 	if !errors.Is(err, http.ErrServerClosed) {
 		close(done)
-		<-stopped
+
+		stopErr := <-stopped
+		if stopErr != nil {
+			return errors.Join(err, stopErr)
+		}
+
 		return err
 	}
 
