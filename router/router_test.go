@@ -27,10 +27,9 @@ func get(t *testing.T, url string) (*http.Response, string) {
 	res, err := http.Get(url)
 	assert.Nil(t, err)
 
-	defer res.Body.Close()
-
 	body, err := io.ReadAll(res.Body)
 	assert.Nil(t, err)
+	assert.Nil(t, res.Body.Close())
 
 	return res, string(body)
 }
@@ -254,8 +253,6 @@ func TestRouter_JsonErrWithoutErrorHandler(t *testing.T) {
 	res, err := http.Get(server.URL + "/x")
 	assert.Nil(t, err)
 
-	defer res.Body.Close()
-
 	body, err := io.ReadAll(res.Body)
 	assert.Nil(t, err)
 
@@ -264,6 +261,8 @@ func TestRouter_JsonErrWithoutErrorHandler(t *testing.T) {
 	assert.Equal(t, "nosniff", res.Header.Get("X-Content-Type-Options"))
 
 	assert.Inside(t, `"error": "missing"`, string(body))
+
+	assert.Nil(t, res.Body.Close())
 }
 
 func TestRouter_JsonErrReachesTheErrorHandler(t *testing.T) {
@@ -288,12 +287,12 @@ func TestRouter_JsonErrReachesTheErrorHandler(t *testing.T) {
 	res, err := http.Get(server.URL + "/x")
 	assert.Nil(t, err)
 
-	defer res.Body.Close()
-
 	assert.Equal(t, http.StatusTeapot, res.StatusCode)
 
 	assert.NotNil(t, handled)
 	assert.Equal(t, http.StatusConflict, handled.Status())
+
+	assert.Nil(t, res.Body.Close())
 }
 
 func TestRouter_JsonErrInGroupContextualizerStopsTheRequest(t *testing.T) {
@@ -318,8 +317,6 @@ func TestRouter_JsonErrInGroupContextualizerStopsTheRequest(t *testing.T) {
 	res, err := http.Get(server.URL + "/private/x")
 	assert.Nil(t, err)
 
-	defer res.Body.Close()
-
 	body, err := io.ReadAll(res.Body)
 	assert.Nil(t, err)
 
@@ -328,6 +325,8 @@ func TestRouter_JsonErrInGroupContextualizerStopsTheRequest(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
 	assert.Inside(t, "no token", string(body))
+
+	assert.Nil(t, res.Body.Close())
 }
 
 func TestRouterUse(t *testing.T) {

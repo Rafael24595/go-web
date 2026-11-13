@@ -230,7 +230,10 @@ func TestListen_ShutdownTimeoutExceeded(t *testing.T) {
 	})
 
 	hostport := addr.String()
-	go http.Get("http://" + hostport + "/stuck")
+	go func() {
+		_, err := http.Get("http://" + hostport + "/stuck")
+		assert.Nil(t, err)
+	}()
 
 	<-inside
 	cancel()
@@ -243,8 +246,6 @@ func TestListen_AddressInUse(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	assert.Nil(t, err)
 
-	defer taken.Close()
-
 	called := false
 	router := NewRouterWithMux(http.NewServeMux()).
 		OnListen(func(net.Addr) {
@@ -255,6 +256,8 @@ func TestListen_AddressInUse(t *testing.T) {
 
 	assert.NotNil(t, err)
 	assert.False(t, called)
+
+	assert.Nil(t, taken.Close())
 }
 
 func TestListen_ContextAlreadyDone(t *testing.T) {
@@ -338,8 +341,6 @@ func TestListenWithTLS_FailingHTTPStopsTheTLSServer(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	assert.Nil(t, err)
 
-	defer taken.Close()
-
 	router := NewRouterWithMux(http.NewServeMux())
 
 	result := make(chan error, 1)
@@ -350,6 +351,8 @@ func TestListenWithTLS_FailingHTTPStopsTheTLSServer(t *testing.T) {
 
 	err = returns(t, result)
 	assert.NotNil(t, err)
+
+	assert.Nil(t, taken.Close())
 }
 
 func TestListenTLS_Strategies(t *testing.T) {
@@ -383,14 +386,13 @@ func TestListenTLS_Strategies(t *testing.T) {
 			res, err := httpsClient(t, cert).Get("https://" + addr.String() + "/x")
 			assert.Nil(t, err)
 
-			defer res.Body.Close()
-
 			assert.Equal(t, http.StatusOK, res.StatusCode)
 			assert.Equal(t, 2, res.ProtoMajor)
 
 			cancel()
 
 			assert.Nil(t, returns(t, result))
+			assert.Nil(t, res.Body.Close())
 		})
 	}
 }

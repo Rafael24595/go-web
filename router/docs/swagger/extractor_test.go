@@ -20,9 +20,11 @@ type tagged struct {
 	Omit      string `json:",omitempty" xml:",omitempty"`
 	Zero      string `json:"zero,omitzero"`
 	Hidden    string `json:"-" xml:"-"`
+	//nolint:staticcheck
 	Dash      string `json:"-,"`
 	Lookalike string `json:"omitempty_count" xml:"attribute"`
 	Attr      string `xml:",attr"`
+	//nolint:unused
 	unexposed string
 }
 

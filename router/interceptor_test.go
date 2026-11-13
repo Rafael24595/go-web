@@ -354,8 +354,8 @@ func TestRouterHandler_AppliesCors(t *testing.T) {
 	res, err := http.DefaultClient.Do(req)
 	assert.Nil(t, err)
 
-	defer res.Body.Close()
-
 	assert.Equal(t, origin, res.Header.Get("Access-Control-Allow-Origin"))
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
+
+	assert.Nil(t, res.Body.Close())
 }
