@@ -1,14 +1,10 @@
 package swagger
 
 import (
-	"encoding/xml"
 	"fmt"
 	"reflect"
-	"strings"
 
 	"github.com/Rafael24595/go-web/router/docs"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 )
 
 type seen struct {
@@ -61,10 +57,15 @@ func (f *FactoryStructToSchema) MakeSchema(media docs.MediaType, root any) (*Sch
 		t = t.Elem()
 	}
 
-	return f.inferStruct(media, t)
+	meta, err := mediaMetaFromType(media)
+	if err != nil {
+		return nil, err
+	}
+
+	return f.inferStruct(meta, t)
 }
 
-func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Type) (string, bool, error) {
+func (f *FactoryStructToSchema) collectSchema(meta mediaMeta, t reflect.Type) (string, bool, error) {
 	isVector := f.isVector(t)
 	t = f.deferencePointer(t)
 
@@ -73,35 +74,29 @@ func (f *FactoryStructToSchema) collectSchema(media docs.MediaType, t reflect.Ty
 	}
 
 	if refs, ok := f.seen[t]; ok {
-		if ref, ok := refs[media]; ok {
+		if ref, ok := refs[meta.MediaType]; ok {
 			return ref.ref, isVector, nil
 		}
 	}
 
-	name, mediaName := f.makeStructName(media, t)
-	ref := f.makeRefString(mediaName)
+	info := meta.StructExtractor(t)
+	ref := f.makeRefString(info.mediaName)
 
-	f.putSeen(t, media, seen{
+	f.putSeen(t, meta.MediaType, seen{
 		ref:  ref,
-		name: mediaName,
+		name: info.mediaName,
 	})
 
-	schema, err := f.makeSchema(media, t)
+	schema, err := f.makeSchema(meta, t)
 	if err != nil {
 		return "", isVector, err
 	}
 
-	if schema != nil && media == docs.XML {
-		schema.XML = &XML{
-			Name:    name,
-			Wrapped: true,
-		}
-	}
+	schema.XML = info.xml
 
-
-	f.putSeen(t, media, seen{
+	f.putSeen(t, meta.MediaType, seen{
 		ref:    ref,
-		name:   mediaName,
+		name:   info.mediaName,
 		schema: *schema,
 	})
 
@@ -116,7 +111,7 @@ func (f *FactoryStructToSchema) putSeen(t reflect.Type, media docs.MediaType, sc
 	f.seen[t][media] = schema
 }
 
-func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type) (*Schema, error) {
+func (f *FactoryStructToSchema) makeSchema(meta mediaMeta, t reflect.Type) (*Schema, error) {
 	t = f.deferencePointer(t)
 
 	if t.Kind() != reflect.Struct {
@@ -126,42 +121,29 @@ func (f *FactoryStructToSchema) makeSchema(media docs.MediaType, t reflect.Type)
 	schema := NewSchema()
 
 	for field := range t.Fields() {
-		if field.Anonymous || !field.IsExported() || f.isMiscField(field) {
+		if field.Anonymous || !field.IsExported() {
 			continue
 		}
 
-		name := field.Name
-		isRequired := f.canBeRequired(field)
-		ref, err := f.inferSchema(media, field.Type)
+		result := meta.FieldExtractor(field)
+		if result.ignore {
+			continue
+		}
+
+		ref, err := f.inferSchema(meta, field.Type)
 		if err != nil {
 			return nil, err
 		}
 
 		ref.Description = field.Tag.Get("description")
 
-		switch media {
-		case docs.XML:
-			if xmlTag, xmlOmitempty, xmlRef := f.isXmlField(field, ref); xmlRef != nil {
-				name = xmlTag
-				isRequired = isRequired && !xmlOmitempty
-				ref = xmlRef
-			}
-		case docs.JSON:
-			if jsonTag, jsonOmitempty, jsonRef := f.isJsonField(field, ref); jsonRef != nil {
-				name = jsonTag
-				isRequired = isRequired && !jsonOmitempty
-				ref = jsonRef
-			}
-		}
+		ref = result.decorate(ref)
 
-		schema = f.addProperty(schema, name, ref, isRequired)
+		isRequired := f.canBeRequired(field) && !result.omitempty
+		schema = f.addProperty(schema, result.tag, ref, isRequired)
 	}
 
 	return schema, nil
-}
-
-func (f *FactoryStructToSchema) isMiscField(field reflect.StructField) bool {
-	return field.Type == reflect.TypeFor[xml.Name]()
 }
 
 func (f *FactoryStructToSchema) addProperty(schema *Schema, name string, property *Schema, isRequired bool) *Schema {
@@ -172,80 +154,13 @@ func (f *FactoryStructToSchema) addProperty(schema *Schema, name string, propert
 	return schema
 }
 
-func (f *FactoryStructToSchema) isJsonField(field reflect.StructField, ref *Schema) (string, bool, *Schema) {
-	attribute := field.Tag.Get("json")
-
-	tag := strings.Split(attribute, ",")[0]
-	if tag == "" || tag == "-" {
-		return "", false, nil
-	}
-
-	omitEmpty := strings.Contains(attribute, "omitempty")
-
-	return tag, omitEmpty, ref
-}
-
-func (f *FactoryStructToSchema) isXmlField(field reflect.StructField, ref *Schema) (string, bool, *Schema) {
-	attribute := field.Tag.Get("xml")
-
-	wrapper := ""
-	tag := strings.Split(attribute, ",")[0]
-	if tag == "" || tag == "-" {
-		return "", false, nil
-	}
-
-	if fragments := strings.Split(tag, ">"); len(fragments) > 1 {
-		tag = strings.TrimSpace(fragments[0])
-		wrapper = strings.TrimSpace(fragments[1])
-	}
-
-	if wrapper != "" {
-		if ref.Items != nil {
-			ref.Items = f.defineXmlName(wrapper, ref.Items, false)
-		} else {
-			ref = f.defineXmlName(wrapper, ref, false)
-		}
-
-		ref = &Schema{
-			Type: "object",
-			Properties: map[string]*Schema{
-				wrapper: ref,
-			},
-		}
-	}
-
-	attr := strings.Contains(attribute, "attr")
-	ref = f.defineXmlName(tag, ref, attr)
-
-	omitEmpty := strings.Contains(attribute, "omitempty")
-	return tag, omitEmpty, ref
-}
-
-func (f *FactoryStructToSchema) defineXmlName(name string, ref *Schema, attribute bool) *Schema {
-	if ref.Ref != "" {
-		refVal := ref.Ref
-		ref.Ref = ""
-
-		ref.AllOf = MakeAllOf(AllOfAttributes{
-			ALL_OF_REF: refVal,
-		})
-	}
-
-	ref.XML = &XML{
-		Name:      name,
-		Attribute: attribute,
-	}
-
-	return ref
-}
-
 func (f *FactoryStructToSchema) canBeRequired(field reflect.StructField) bool {
 	return field.Type.Kind() != reflect.Pointer &&
 		field.Type.Kind() != reflect.Slice &&
 		field.Type.Kind() != reflect.Map
 }
 
-func (f *FactoryStructToSchema) inferSchema(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+func (f *FactoryStructToSchema) inferSchema(media mediaMeta, fieldType reflect.Type) (*Schema, error) {
 	for fieldType.Kind() == reflect.Pointer {
 		fieldType = fieldType.Elem()
 	}
@@ -275,7 +190,7 @@ func (f *FactoryStructToSchema) inferSchema(media docs.MediaType, fieldType refl
 	}
 }
 
-func (f *FactoryStructToSchema) inferStruct(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+func (f *FactoryStructToSchema) inferStruct(media mediaMeta, fieldType reflect.Type) (*Schema, error) {
 	ref, isVector, err := f.collectSchema(media, fieldType)
 	if err != nil {
 		return nil, err
@@ -292,7 +207,7 @@ func (f *FactoryStructToSchema) inferStruct(media docs.MediaType, fieldType refl
 	return &Schema{Ref: ref}, nil
 }
 
-func (f *FactoryStructToSchema) inferArray(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+func (f *FactoryStructToSchema) inferArray(media mediaMeta, fieldType reflect.Type) (*Schema, error) {
 	itemRef, err := f.inferSchema(media, fieldType.Elem())
 	if err != nil {
 		return nil, err
@@ -304,7 +219,7 @@ func (f *FactoryStructToSchema) inferArray(media docs.MediaType, fieldType refle
 	}, nil
 }
 
-func (f *FactoryStructToSchema) inferMap(media docs.MediaType, fieldType reflect.Type) (*Schema, error) {
+func (f *FactoryStructToSchema) inferMap(media mediaMeta, fieldType reflect.Type) (*Schema, error) {
 	properties, err := f.inferSchema(media, fieldType.Elem())
 	if err != nil {
 		return nil, err
@@ -327,59 +242,6 @@ func (f *FactoryStructToSchema) deferencePointer(t reflect.Type) reflect.Type {
 
 func (f *FactoryStructToSchema) isVector(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice || t.Kind() == reflect.Array
-}
-
-func (f *FactoryStructToSchema) makeStructName(media docs.MediaType, t reflect.Type) (string, string) {
-	name := t.Name()
-	if name == "" {
-		name = "Anon"
-	}
-
-	mediaName := f.makeMediaName(media, t.PkgPath(), name)
-
-	if xmlName, ok := f.hasXmlRoot(t); ok {
-		return xmlName, mediaName
-	}
-
-	return name, mediaName
-}
-
-func (f *FactoryStructToSchema) hasXmlRoot(t reflect.Type) (string, bool) {
-	for field := range t.Fields() {
-		if field.Type == reflect.TypeFor[xml.Name]() {
-			attribute := field.Tag.Get("xml")
-			tag, _, _ := strings.Cut(attribute, ",")
-			return tag, tag != "" && tag != "-"
-		}
-	}
-
-	return "", false
-}
-
-func (f *FactoryStructToSchema) makeMediaName(media docs.MediaType, pkg, name string) string {
-	switch media {
-	case docs.XML:
-		media = "xml"
-	case docs.JSON:
-		media = "json"
-	default:
-		media = ""
-	}
-
-	fragments := strings.Split(pkg, "/")
-	pkgFormat := fragments[len(fragments)-1]
-
-	mediaFormat := string(media)
-	nameFormat := name
-	if media != "" {
-		caser := cases.Title(language.Und, cases.NoLower)
-		
-		mediaFormat = caser.String(mediaFormat)
-		pkgFormat = caser.String(pkgFormat)
-		nameFormat = caser.String(nameFormat)
-	}
-
-	return fmt.Sprintf("%s_%s_%s", mediaFormat, pkgFormat, nameFormat)
 }
 
 func (f *FactoryStructToSchema) makeRefString(name string) string {

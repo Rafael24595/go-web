@@ -1,40 +1,41 @@
 package swagger
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/Rafael24595/go-web/router/docs"
 )
 
+// ErrUnsupportedMediaType is returned when an unsupported media type is requested.
+var ErrUnsupportedMediaType = errors.New("swagger: unsupported media type")
+
 type mediaMeta struct {
-	MediaType docs.MediaType
-	Format    string
-	Extractor fieldExtractor
+	MediaType       docs.MediaType
+	StructExtractor structExtractor
+	FieldExtractor  fieldExtractor
 }
 
 var jsonMeta = mediaMeta{
-	MediaType: docs.JSON,
-	Format:    "json",
-	Extractor: jsonExtractor,
+	MediaType:       docs.JSON,
+	StructExtractor: plainStructExtractor("json"),
+	FieldExtractor:  jsonFieldExtractor,
 }
 
 var xmlMeta = mediaMeta{
-	MediaType: docs.XML,
-	Format:    "xml",
-	Extractor: xmlExtractor,
+	MediaType:       docs.XML,
+	StructExtractor: xmlStructExtractor("xml"),
+	FieldExtractor:  xmlFieldExtractor,
 }
 
-var voidMeta = mediaMeta{
-	MediaType: "",
-	Format:    "",
-	Extractor: voidExtractor,
-}
-
-func mediaMetaFromType(media docs.MediaType) mediaMeta {
+func mediaMetaFromType(media docs.MediaType) (mediaMeta, error) {
 	switch media {
 	case docs.JSON:
-		return jsonMeta
+		return jsonMeta, nil
 	case docs.XML:
-		return xmlMeta
+		return xmlMeta, nil
 	default:
-		return voidMeta
+		err := fmt.Errorf("%w: %q", ErrUnsupportedMediaType, media)
+		return mediaMeta{}, err
 	}
 }
