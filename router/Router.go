@@ -19,6 +19,7 @@ import (
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-log/log/record"
 	"github.com/Rafael24595/go-web/router/docs"
+	"github.com/Rafael24595/go-web/router/internal/paths"
 	"github.com/Rafael24595/go-web/router/result"
 )
 
@@ -123,8 +124,8 @@ func (r *Router) Logger(logger log.Log) *Router {
 	return r
 }
 
-// TraceRequests logs every request the router handles, with its method,
-// path and duration. It is off by default.
+// TraceRequests logs the client address and the route pattern of every
+// request it handles.
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) TraceRequests(trace bool) *Router {
@@ -376,8 +377,8 @@ func (r *Router) Cors(cors *Cors) *Router {
 	return r
 }
 
-// Handler returns the router as an http.Handler with CORS and the middlewares 
-// added with Use applied. Prefer Listen, ListenTLS and ListenWithTLS, which 
+// Handler returns the router as an http.Handler with CORS and the middlewares
+// added with Use applied. Prefer Listen, ListenTLS and ListenWithTLS, which
 // also manage the server's lifetime; use Handler for tests (httptest.NewServer)
 // or to mount the router inside a server you build yourself.
 func (r *Router) Handler() http.Handler {
