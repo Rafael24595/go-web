@@ -1,9 +1,11 @@
 package swagger
 
 import (
+	"cmp"
 	"encoding"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/Rafael24595/go-web/router/docs"
 )
@@ -14,6 +16,14 @@ type component struct {
 	ref    string
 	name   string
 	schema Schema
+}
+
+type property struct {
+	name     string
+	schema   *Schema
+	required bool
+	depth    int
+	named    bool
 }
 
 // schemaFactory builds OpenAPI 3.0 schema definitions from Go structs.
@@ -132,15 +142,66 @@ func (f *schemaFactory) uniqueName(name string, t reflect.Type) string {
 }
 
 func (f *schemaFactory) makeStructSchema(format mediaFormat, t reflect.Type) (*Schema, error) {
+	embedding := map[reflect.Type]bool{t: true}
+
+	candidates, err := f.collectProperties(format, t, 0, true, embedding)
+	if err != nil {
+		return nil, err
+	}
+
 	schema := NewSchema()
 
+	properties := resolveProperties(candidates)
+	for _, property := range properties {
+		schema = f.addProperty(
+			schema, property.name, property.schema, property.required,
+		)
+	}
+
+	return schema, nil
+}
+
+func (f *schemaFactory) collectProperties(
+	format mediaFormat,
+	t reflect.Type,
+	depth int,
+	canRequire bool,
+	embedding map[reflect.Type]bool,
+) ([]property, error) {
+	var properties []property
+
 	for field := range t.Fields() {
-		if field.Anonymous || !field.IsExported() {
+		result := format.fieldExtractor(field)
+		if result.ignore {
 			continue
 		}
 
-		result := format.fieldExtractor(field)
-		if result.ignore {
+		if embedded, pointer, ok := promotes(field, result); ok {
+			if embedding[embedded] {
+				continue
+			}
+
+			embedding[embedded] = true
+
+			embeddedDepth := depth + 1
+			embeddedRequire := canRequire && !pointer
+
+			promoted, err := f.collectProperties(
+				format, embedded, embeddedDepth, embeddedRequire, embedding,
+			)
+
+			delete(embedding, embedded)
+
+			if err != nil {
+				return nil, err
+			}
+
+			properties = append(properties, promoted...)
+
+			continue
+		}
+
+		if !field.IsExported() {
 			continue
 		}
 
@@ -152,12 +213,85 @@ func (f *schemaFactory) makeStructSchema(format mediaFormat, t reflect.Type) (*S
 		ref.Description = field.Tag.Get("description")
 
 		ref = result.decorate(ref)
+		isRequired := canRequire && f.canBeRequired(field) && !result.omitempty
 
-		isRequired := f.canBeRequired(field) && !result.omitempty
-		schema = f.addProperty(schema, result.name, ref, isRequired)
+		properties = append(properties, property{
+			name:     result.name,
+			schema:   ref,
+			required: isRequired,
+			depth:    depth,
+			named:    result.named,
+		})
 	}
 
-	return schema, nil
+	return properties, nil
+}
+
+func promotes(field reflect.StructField, result fieldInfo) (reflect.Type, bool, bool) {
+	if !field.Anonymous || result.named {
+		return nil, false, false
+	}
+
+	t := field.Type
+	pointer := false
+
+	if t.Kind() == reflect.Pointer {
+		t, pointer = t.Elem(), true
+	}
+
+	return t, pointer, t.Kind() == reflect.Struct
+}
+
+func resolveProperties(candidates []property) []property {
+	byName := make(map[string][]property)
+	for _, c := range candidates {
+		byName[c.name] = append(byName[c.name], c)
+	}
+
+	winners := make(map[string]property, len(byName))
+	for name, rivals := range byName {
+		if winner, ok := dominant(rivals); ok {
+			winners[name] = winner
+		}
+	}
+
+	resolved := make([]property, 0, len(winners))
+	for _, c := range candidates {
+		winner, ok := winners[c.name]
+		if ok && winner == c {
+			resolved = append(resolved, c)
+		}
+	}
+
+	return resolved
+}
+
+func dominant(rivals []property) (property, bool) {
+	if len(rivals) == 1 {
+		return rivals[0], true
+	}
+
+	depth := slices.MinFunc(rivals, func(a, b property) int {
+		return cmp.Compare(a.depth, b.depth)
+	}).depth
+
+	shallowest := slices.DeleteFunc(slices.Clone(rivals), func(p property) bool {
+		return p.depth != depth
+	})
+
+	if len(shallowest) == 1 {
+		return shallowest[0], true
+	}
+
+	named := slices.DeleteFunc(shallowest, func(p property) bool {
+		return !p.named
+	})
+
+	if len(named) == 1 {
+		return named[0], true
+	}
+
+	return property{}, false
 }
 
 func (f *schemaFactory) addProperty(schema *Schema, name string, property *Schema, isRequired bool) *Schema {

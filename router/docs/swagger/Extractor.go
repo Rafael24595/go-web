@@ -99,23 +99,32 @@ func xmlRootName(t reflect.Type) (string, bool) {
 type fieldInfo struct {
 	ignore    bool
 	name      string
+	named     bool
 	omitempty bool
 	decorate  fieldDecorator
+}
+
+type tagInfo struct {
+	name    string
+	named   bool
+	options []string
+	ignore  bool
 }
 
 type fieldExtractor func(reflect.StructField) fieldInfo
 
 func jsonFieldExtractor(field reflect.StructField) fieldInfo {
-	name, options, ignore := parseTag(field, "json")
-	if ignore {
+	info := parseTag(field, "json")
+	if info.ignore {
 		return fieldInfo{ignore: true}
 	}
 
-	omitEmpty := slices.Contains(options, "omitempty") ||
-		slices.Contains(options, "omitzero")
+	omitEmpty := slices.Contains(info.options, "omitempty") ||
+		slices.Contains(info.options, "omitzero")
 
 	return fieldInfo{
-		name:      name,
+		name:      info.name,
+		named:     info.named,
 		omitempty: omitEmpty,
 		decorate:  identityDecorator,
 	}
@@ -126,22 +135,23 @@ func xmlFieldExtractor(field reflect.StructField) fieldInfo {
 		return fieldInfo{ignore: true}
 	}
 
-	name, options, ignore := parseTag(field, "xml")
-	if ignore {
+	info := parseTag(field, "xml")
+	if info.ignore {
 		return fieldInfo{ignore: true}
 	}
 
 	wrapper := ""
-	if parent, child, ok := strings.Cut(name, ">"); ok {
-		name = strings.TrimSpace(parent)
+	if parent, child, ok := strings.Cut(info.name, ">"); ok {
+		info.name = strings.TrimSpace(parent)
 		wrapper = strings.TrimSpace(child)
 	}
 
-	omitEmpty := slices.Contains(options, "omitempty")
-	decorator := xmlFieldDecorator(name, wrapper, options)
+	omitEmpty := slices.Contains(info.options, "omitempty")
+	decorator := xmlFieldDecorator(info.name, wrapper, info.options)
 
 	return fieldInfo{
-		name:      name,
+		name:      info.name,
+		named:     info.named,
 		omitempty: omitEmpty,
 		decorate:  decorator,
 	}
@@ -165,22 +175,31 @@ func withXmlName(name string, ref *Schema, attribute bool) *Schema {
 	return ref
 }
 
-func parseTag(field reflect.StructField, key string) (name string, options []string, ignore bool) {
+func parseTag(field reflect.StructField, key string) tagInfo {
 	value := field.Tag.Get(key)
 	if value == "-" {
-		return "", nil, true
+		return tagInfo{
+			ignore: true,
+		}
 	}
 
 	name, rest, _ := strings.Cut(value, ",")
-	if name == "" {
+	named := name != ""
+
+	if !named {
 		name = field.Name
 	}
 
+	var options []string
 	if rest != "" {
 		options = strings.Split(rest, ",")
 	}
 
-	return name, options, false
+	return tagInfo{
+		name:    name,
+		named:   named,
+		options: options,
+	}
 }
 
 type fieldDecorator func(*Schema) *Schema
