@@ -344,6 +344,8 @@ func (r *Router) RouteWithOptions(method string, handler RequestHandler, pattern
 // reaching them, and their responses (a 403 from a Host check, for instance)
 // already carry the CORS headers, so cross-origin clients can read them.
 // They are not applied to the HTTP-to-HTTPS redirect server of ListenWithTLS.
+//
+// Returns the Router itself for fluent configuration.
 func (r *Router) Use(middlewares ...Middleware) *Router {
 	for _, m := range middlewares {
 		if m != nil {
@@ -364,10 +366,10 @@ func (r *Router) Cors(cors *Cors) *Router {
 	return r
 }
 
-// Handler returns the router as an http.Handler with its middlewares (CORS)
-// applied. Prefer Listen, ListenTLS and ListenWithTLS, which also manage the
-// server's lifetime; use Handler for tests (httptest.NewServer) or to mount
-// the router inside a server you build yourself.
+// Handler returns the router as an http.Handler with CORS and the middlewares 
+// added with Use applied. Prefer Listen, ListenTLS and ListenWithTLS, which 
+// also manage the server's lifetime; use Handler for tests (httptest.NewServer)
+// or to mount the router inside a server you build yourself.
 func (r *Router) Handler() http.Handler {
 	return r.serving()
 }
