@@ -281,19 +281,24 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 	}
 
 	if route.Query != nil {
-		for n, d := range route.Query {
+		names := slices.Sorted(maps.Keys(route.Query))
+
+		for _, name := range names {
 			parameters = append(parameters, Parameter{
-				Name:        n,
+				Name:        name,
 				In:          "query",
-				Description: d,
+				Description: route.Query[name],
 				Required:    false,
 			})
 		}
 	}
 
 	if route.Cookies != nil {
-		for n, d := range route.Cookies {
-			parameters = append(parameters, v.makeCookie(n, d))
+		names := slices.Sorted(maps.Keys(route.Cookies))
+
+		for _, name := range names {
+			cookie := v.makeCookie(name, route.Cookies[name])
+			parameters = append(parameters, cookie)
 		}
 	}
 
