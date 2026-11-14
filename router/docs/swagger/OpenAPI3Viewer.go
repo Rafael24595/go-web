@@ -47,7 +47,7 @@ func NewViewer() *OpenAPI3Viewer {
 }
 
 // Logger sets the logger for the viewer and returns itself.
-func (v *OpenAPI3Viewer) Logger(logger log.Log) docs.IDocViewer {
+func (v *OpenAPI3Viewer) Logger(logger log.Log) *OpenAPI3Viewer {
 	v.logger = logger
 	return v
 }
