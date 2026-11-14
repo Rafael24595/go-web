@@ -18,7 +18,6 @@ import (
 	"github.com/Rafael24595/go-collections/collection"
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-log/log/record"
-	"github.com/Rafael24595/go-web/router/configuration"
 	"github.com/Rafael24595/go-web/router/docs"
 	"github.com/Rafael24595/go-web/router/result"
 )
@@ -51,6 +50,7 @@ var ErrTLSStrategyRequired = errors.New("router: a TLS strategy is required")
 // It provides methods to register routes, contextualizers, error handlers,
 type Router struct {
 	logger log.Log
+	trace  bool
 
 	server          *http.ServeMux
 	ctx             context.Context
@@ -96,6 +96,7 @@ func NewRouterWithMux(server *http.ServeMux) *Router {
 
 	return &Router{
 		logger:               log.Default(),
+		trace:                false,
 		server:               server,
 		ctx:                  context.Background(),
 		shutdownTimeout:      DefaultShutdownTimeout,
@@ -119,6 +120,15 @@ func NewRouterWithMux(server *http.ServeMux) *Router {
 // Returns the Router itself for fluent configuration.
 func (r *Router) Logger(logger log.Log) *Router {
 	r.logger = logger
+	return r
+}
+
+// TraceRequests logs every request the router handles, with its method,
+// path and duration. It is off by default.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) TraceRequests(trace bool) *Router {
+	r.trace = trace
 	return r
 }
 
@@ -583,8 +593,7 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	config := configuration.Instance()
-	if config.Dev() && config.TraceRequest() {
+	if r.trace {
 		message := fmt.Sprintf("%s - %s", req.RemoteAddr, req.Pattern)
 		r.logger.Custom("DEV-REQUEST", message)
 	}
