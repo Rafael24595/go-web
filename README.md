@@ -690,14 +690,19 @@ tags := docs.DocTags("auth", "users")
 
 ---
 
-### 6. Flags
+### 6. Request tracing
 
-The configuration is initialized from the `.env` file (or environment variables). The following keys are supported:
+`TraceRequests` logs the client address and the route pattern of every request the router handles, under the `DEV-REQUEST` category of its logger. It is off by default:
 
-| Variable              | Description                         | Default |
-|-----------------------|-------------------------------------|---------|
-| `GO_WEB_DEV`          | Enables or disables development mode | false   |
-| `GO_WEB_TRACE_REQUEST`| Enables or disables HTTP request tracing | false   |
+```go
+route.TraceRequests(true)
+```
+
+To drive it from the environment, read the variable in your application:
+
+```go
+route.TraceRequests(os.Getenv("TRACE_REQUESTS") == "true")
+```
 
 ## Example
 
@@ -792,6 +797,7 @@ func main() {
 - A nil handler panics in `g_ast_dbg` builds and skips the route in the rest.
 - The Swagger viewer: `OpenAPI3ViewerOptions` is gone; `Load` takes `OpenAPI3ViewerOption`s (`WithYAML`, `WithYAMLFile` or your own) and returns an error. `DefineType` is new.
 - Schemas follow the encoders: unexported fields and `json:"-"` are left out, `omitzero` makes a field optional, types with their own marshaler and `[]byte` are described as they are written, top-level slices and maps are described as such, and component names no longer collide.
+- The router no longer reads a `.env` file or the `GO_WEB_DEV` and `GO_WEB_TRACE_REQUEST` variables: request tracing is turned on with `TraceRequests(true)`.
 
 ---
 
