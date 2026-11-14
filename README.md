@@ -26,11 +26,78 @@ go get github.com/Rafael24595/go-web
 
 The `Router` is the central component that manages route registration, handlers, CORS, and documentation.
 
+#### 1.0 Creating and serving a router
+
+```go
+route := router.NewRouter()                          // routes on http.DefaultServeMux
+route := router.NewRouterWithMux(http.NewServeMux()) // routes on a mux of its own
+```
+
+`NewRouter()` registers its routes on the process-wide `http.DefaultServeMux`, so only one such router can declare a given route per process. Use `NewRouterWithMux` when several routers live in the same process, typically in tests. Passing `nil` creates a new mux.
+
+The router can start its own server:
+
+```go
+route.Listen(":8080")                                                                   // every interface
+route.Listen("127.0.0.1:8080")                                                          // local only
+route.ListenTLS(":8443", router.TLSFromFiles("server.crt", "server.key"))
+route.ListenWithTLS(":8080", ":8443", router.TLSFromFiles("server.crt", "server.key"))  // HTTP redirects to HTTPS
+```
+
+The certificate comes from a `TLSStrategy`: `TLSFromFiles` reads PEM files, `TLSFromConfig` takes a `*tls.Config` with certificates in memory (`Certificates`) or chosen per connection (`GetCertificate`, e.g. autocert or certificates renewed without restarting).
+
+An address made only of digits is taken as a port (`"8080"` is `":8080"`). `ListenWithTLS` answers every plain HTTP request with a `308 Permanent Redirect` to the HTTPS address, keeping the method and the body; the host comes from the request and the port from the TLS address (omitted when it is 443).
+
+Server settings are passed as options:
+
+| Option | `http.Server` field |
+|:--|:--|
+| `router.WithReadTimeout(d)` | `ReadTimeout` |
+| `router.WithReadHeaderTimeout(d)` | `ReadHeaderTimeout` |
+| `router.WithWriteTimeout(d)` | `WriteTimeout` |
+| `router.WithIdleTimeout(d)` | `IdleTimeout` |
+| `router.WithMaxHeaderBytes(n)` | `MaxHeaderBytes` |
+
+```go
+route.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
+```
+
+A `ServerOption` is a plain `func(*http.Server)`, so any other field can be set with your own function. `Addr`, `Handler` and `ErrorLog` are always set by the router and cannot be changed this way.
+
+To stop the server gracefully, give the router a context. When it is done, the servers stop accepting connections, in-flight requests get up to the shutdown timeout to finish, and `Listen` returns `nil`. `OnListen` is called with the real address once the server is listening, before it serves anything:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+defer stop()
+
+err := router.NewRouter().
+	Context(ctx).
+	ShutdownTimeout(10 * time.Second). // default: router.DefaultShutdownTimeout (5s)
+	OnListen(func(addr net.Addr) { 
+        log.Printf("listening on %s", addr) 
+    }).
+	Listen("127.0.0.1:0") // port 0: OnListen tells which one was chosen
+```
+
+For tests (`httptest.NewServer`) or to mount the router inside a server of your own, `Handler()` returns it as an `http.Handler`, with CORS and the middlewares added with `Use` applied.
+
+#### 1.0.1 Middlewares
+
+`Use` wraps every route served by `Listen`, `ListenTLS`, `ListenWithTLS` and `Handler` with standard `func(http.Handler) http.Handler` middlewares. The first one added is the outermost:
+
+```go
+route.Use(requestLog, hostCheck)
+```
+
+They run after the built-in CORS handling: preflight requests are answered before reaching them, and their responses (a `403` from a Host check, for instance) already carry the CORS headers. They are not applied to the HTTP-to-HTTPS redirect server of `ListenWithTLS`.
+
 #### 1.1 Basic route
 
 ```go
 route.Route("GET", handler, "/hello")
 ```
+
+Routes registered with `Route` are served but not documented; see 1.4.
 
 #### 1.2 With parameters
 
@@ -42,14 +109,18 @@ route.Route("GET", handler, "/hello/{%s}", PLACE)
 
 #### 1.3 With options
 
-```go
-options := router.NewHandlerOptions(handler).
-    Context(ctxHandler).
-    Error(errHandler).
-    Panic(panicHandler)
+`RouteWithOptions` takes `RouteOption`s that configure the route as it is registered:
 
-route.RouteWithOptions("GET", options, "/secure")
+```go
+route.RouteWithOptions("GET", handler, "/users/{%s}",
+    router.WithParams(USER),        // fills the %s verbs of the pattern
+    router.WithContext(ctxHandler), // instead of the global contextualizer
+    router.WithError(errHandler),   // instead of the global error handler
+    router.WithPanic(panicHandler), // instead of the global panic handler
+)
 ```
+
+A nil handler is a programming error: builds with the `g_ast_dbg` tag panic, the rest skip the route (see go-assert's `invariant`).
 
 #### 1.4 With documentation
 
@@ -75,16 +146,21 @@ route.RouteDocument("GET", handler, "/hello/{%s}", doc)
 #### 1.5 With documentation and options
 
 ```go
-route.RouteDocumentWithOptions("GET", options, "/secure", doc)
+route.RouteWithOptions("GET", handler, "/hello/{%s}",
+    router.WithDocs(doc),
+    router.WithError(errHandler),
+)
 ```
+
+`RouteDocument(method, handler, pattern, doc)` is a shorthand for `RouteWithOptions` with `WithDocs(doc)`. The parameters of the documentation fill the `%s` verbs of the pattern.
 
 #### 1.6 Context handler
 
 ```go
-route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+route.Contextualizer(func(http.ResponseWriter, *http.Request) (*router.Context, error) {
     context := router.NewContext()
     context.Put("username", "admin")
-    return *context, nil
+    return context, nil
 })
 ```
 
@@ -240,8 +316,8 @@ This approach keeps handlers simple and moves orchestration logic to the router 
 The `Cors` struct provides a fluent API for configuring cross-origin resource sharing.
 
 ```go
-cors := router.EmptyCors().
-    AllowedOrigins("https://example.com").
+cors := router.NewCors().
+    AllowedOrigins("https://example.com", "https://admin.example.com").
     AllowedMethods("GET", "POST").
     AllowedHeaders("Authorization").
     AllowCredentials()
@@ -249,9 +325,18 @@ cors := router.EmptyCors().
 route := router.NewRouter().Cors(cors)
 ```
 
+How requests are answered:
+
+- **No `Origin` header** (same-origin requests, `curl`, other servers): not a CORS request, no CORS headers.
+- **A listed origin**: `Access-Control-Allow-Origin` echoes that origin alone, and `Access-Control-Allow-Credentials: true` is added when credentials are allowed.
+- **An origin that is not listed**: no CORS headers; the request still reaches the route, and the browser blocks the response.
+- **`*` in the list**: any origin is allowed. Without credentials the answer is the literal `*`. With credentials browsers refuse `*`, so the request origin is echoed instead, which lets every website send credentialed requests: list the origins explicitly when you need cookies.
+- **Preflight** (`OPTIONS` with `Access-Control-Request-Method`) from an allowed origin: answered with `204 No Content` plus `Access-Control-Allow-Methods` and `Access-Control-Allow-Headers`; it never reaches the routes.
+- Every response carries `Vary: Origin`, so caches keep a separate copy per origin.
+
 #### 2.1 Permissive CORS
 
-Allows all origins, methods, and headers:
+Allows any origin, with the usual methods and the `Content-Type` and `Authorization` headers, **without credentials**: a token sent in the `Authorization` header works, cookies from other origins do not.
 
 ```go
 cors := router.PermissiveCors()
@@ -273,7 +358,7 @@ Reads the entire request body as raw bytes.
 - On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     bytes, res := router.InputBytes(r)
     if res != nil {
         return *res
@@ -290,7 +375,7 @@ Reads the entire request body as string.
 - On failure: returns an empty vector of bytes and a *result.Result with status 400 Bad Request.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     text, res := router.InputText(r)
     if res != nil {
         return *res
@@ -312,7 +397,7 @@ type User struct {
     Age  int    `json:"age"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     user, res := router.InputJson[User](r)
     if res != nil {
         return *res
@@ -337,7 +422,7 @@ type Product struct {
     Price string `xml:"price"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     product, res := router.InputXml[Product](r)
     if res != nil {
         return *res
@@ -354,7 +439,7 @@ All input types have a WithOpts variant that allows you to control:
 - Strict: whether to return an error if the limit is exceeded.
 
 ```go
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
     opts := router.InputOpts{Limit: 1 << 20, Strict: true} // 1 MB strict limit
     data, res := router.InputBytesWithOpts(w, r, opts)
     if res != nil {
@@ -541,28 +626,41 @@ type IDocViewer interface {
 
 #### 5.2 Swagger Viewer
 
-The `swagger` package provides an implementation of IDocViewer for OpenAPI 3.0.
+The `swagger` package provides an implementation of `IDocViewer` for OpenAPI 3.0. It serves Swagger UI at `/swagger/` and the definition at `/swagger/doc.json`.
 
 ```go
-route := router.NewRouter()
+viewer := swagger.NewViewer()
 
-options := swagger.OpenAPI3ViewerOptions{
-    Version:   "v1.0.0",
-    EnableTLS: true,
-    OnlyTLS:   false,
-    Port:      8080,
-    PortTLS:   8081,
-    FileYML:   "swagger.yaml",
+err := viewer.Load(
+    swagger.WithYAMLFile("swagger.yaml"), // a base definition: info, tags...
+    func(d *swagger.OpenAPI3) error {     // or any field, set in code
+        d.Info.Version = version
+        return nil
+    },
+)
+
+if err != nil {
+    return err
 }
 
-viewer := swagger.NewViewer()
-viewer.Logger(customLog)
-viewer.Load(options)
+viewer.DefineType(
+    reflect.TypeFor[time.Time](),
+    swagger.Schema{Type: "string", Format: "date-time"},
+)
 
-route.DocViewer(viewer)
+route := router.NewRouter().DocViewer(viewer) // before the routes: they register themselves in it
 ```
 
-If a Swagger file path is provided in the options, it will be loaded as the base OpenAPI definition. You can then override or extend it using the given options.
+`Load` starts from an empty OpenAPI 3.0.0 definition and applies the options in order; when one fails, it returns its error and leaves the viewer unchanged. `WithYAML` takes the YAML content (from `go:embed`, for instance) and `WithYAMLFile` a path; only the fields present in the YAML are set. An `OpenAPI3ViewerOption` is a plain `func(*swagger.OpenAPI3) error`. The only server listed is `/`, the one serving the definition.
+
+Schemas are generated from the payload types, the way `encoding/json` and `encoding/xml` write them:
+
+- Names, `omitempty` and `omitzero` come from the `json`/`xml` tags; `-` hides a field and unexported fields are left out. The `description` tag becomes the field's description.
+- A struct becomes a component (`Json_<package>_<Type>`) referenced with `$ref`; slices, arrays and maps are described inline. Two types that would get the same name get a counter (`_2`).
+- A type with its own `MarshalJSON`/`MarshalXML` is described as any value, one with `MarshalText` as a string, and `[]byte` as base64 (JSON) or plain text (XML).
+- `DefineType` replaces what would be inferred for a type, for types that encode themselves (`time.Time`, `uuid.UUID`, a decimal). Call it before the routes are registered.
+
+Only routes registered with `RouteDocument` or `WithDocs` are documented.
 
 #### 5.3 No-op viewer
 
@@ -592,14 +690,19 @@ tags := docs.DocTags("auth", "users")
 
 ---
 
-### 6. Flags
+### 6. Request tracing
 
-The configuration is initialized from the `.env` file (or environment variables). The following keys are supported:
+`TraceRequests` logs the client address and the route pattern of every request the router handles, under the `DEV-REQUEST` category of its logger. It is off by default:
 
-| Variable              | Description                         | Default |
-|-----------------------|-------------------------------------|---------|
-| `GO_WEB_DEV`          | Enables or disables development mode | false   |
-| `GO_WEB_TRACE_REQUEST`| Enables or disables HTTP request tracing | false   |
+```go
+route.TraceRequests(true)
+```
+
+To drive it from the environment, read the variable in your application:
+
+```go
+route.TraceRequests(os.Getenv("TRACE_REQUESTS") == "true")
+```
 
 ## Example
 
@@ -619,7 +722,7 @@ type DtoGreetings struct {
     Message string `json:"message" description:"Message"`
 }
 
-func handler(w http.ResponseWriter, r *http.Request, ctx router.Context) result.Result {
+func handler(w http.ResponseWriter, r *http.Request, ctx *router.Context) result.Result {
 	user := ctx.Getz("username").
 		Stringd("anonymous")
 	return result.CustomOk(fmt.Sprintf("hello %v from world", user), &CustomEncoder{})
@@ -629,28 +732,26 @@ func main() {
     route := router.NewRouter()
     route.Logger(customLog)
 
-    options := swagger.OpenAPI3ViewerOptions{
-        Version:   "v1.0.0",
-        EnableTLS: true,
-        OnlyTLS:   false,
-        Port:      8080,
-        PortTLS:   8081,
-        FileYML:   "swagger.yaml",
-    }
-
     viewer := swagger.NewViewer()
     viewer.Logger(customLog)
-    viewer.Load(options)
+
+    err := viewer.Load(
+        swagger.WithYAMLFile("swagger.yaml"),
+    )
+
+    if err != nil {
+        log.Fatal(err)
+    }
 
     route.DocViewer(viewer)
 
     cors := router.PermissiveCors()
     route.Cors(cors)
 
-    route.Contextualizer(func(http.ResponseWriter, *http.Request) (router.Context, error) {
+    route.Contextualizer(func(http.ResponseWriter, *http.Request) (*router.Context, error) {
         context := router.NewContext()
         context.Put("username", "admin")
-        return *context, nil
+        return context, nil
     })
 
     route.PanicHandler(func(w http.ResponseWriter, r *http.Request, rec any) {
@@ -659,8 +760,8 @@ func main() {
 
     doc := docs.DocRoute{
         Description: "description",
-        Parameters: docs.DocParameters{
-            PLACE: PLACE_DESC,
+        Parameters: docs.DocOrderParameters{
+            docs.Parameter(PLACE, PLACE_DESC),
         },
         Request: docs.DocJsonPayload[DtoPlace](),
         Responses: docs.DocResponses{
@@ -671,9 +772,32 @@ func main() {
 
     route.RouteDocument("GET", handler, "/hello/{%s}", doc)
     
-    route.Listen(":8080")
+    route.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
 }
 ```
+
+---
+
+## Migrating from v0.11
+
+- `Listen`, `ListenTLS` and `ListenWithTLS` take addresses (`":8080"`, `"127.0.0.1:8080"`) instead of port numbers, plus optional `ServerOption`s. A string of digits is still read as a port.
+- Routers keep their routes on their own mux: `NewRouterWithMux` and `Handler()` are new; `NewRouter()` still uses `http.DefaultServeMux`.
+- Response headers set by encoders (`Content-Type`) are now sent; before they were written after the status line and lost on real connections.
+- `PanicHandler` can be registered (it panicked in v0.11), and a request that reaches the router without a handler gets `404`.
+- `ListenWithTLS` redirects with `308` instead of `301`, and builds the target from the request host and the TLS port.
+- CORS follows the rules in section 2: only the matching origin is echoed, unlisted origins and requests without `Origin` get no CORS headers, preflights are answered with `204`, and `PermissiveCors()` no longer allows credentials.
+- `ListenTLS` and `ListenWithTLS` take a `TLSStrategy` (`TLSFromFiles`, `TLSFromConfig`) instead of the certificate and key paths.
+- `Context`, `ShutdownTimeout` and `OnListen` are new; `Listen` returns `nil` when the context stops the server, and `ListenWithTLS` stops both servers when either one stops.
+- `JsonErr`, `XmlErr` and `CustomErr` are now errors: they stop group contextualizers and reach the `ErrorHandler`.
+- Plain-text responses carry `charset=utf-8`, and text errors no longer end with a newline.
+- Requires Go 1.27.
+- `Use` is new: standard middlewares around every route.
+- `RouteWithOptions(method, handler, pattern, options...)` takes `RouteOption`s (`WithParams`, `WithContext`, `WithError`, `WithPanic`, `WithDocs`); `HandlerOptions`, `NewHandlerOptions` and `RouteDocumentWithOptions` are gone.
+- Routes registered with `Route` no longer appear in the documentation.
+- A nil handler panics in `g_ast_dbg` builds and skips the route in the rest.
+- The Swagger viewer: `OpenAPI3ViewerOptions` is gone; `Load` takes `OpenAPI3ViewerOption`s (`WithYAML`, `WithYAMLFile` or your own) and returns an error. `DefineType` is new.
+- Schemas follow the encoders: unexported fields and `json:"-"` are left out, `omitzero` makes a field optional, types with their own marshaler and `[]byte` are described as they are written, top-level slices and maps are described as such, and component names no longer collide.
+- The router no longer reads a `.env` file or the `GO_WEB_DEV` and `GO_WEB_TRACE_REQUEST` variables: request tracing is turned on with `TraceRequests(true)`.
 
 ---
 
