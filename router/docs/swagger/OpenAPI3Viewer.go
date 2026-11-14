@@ -356,9 +356,8 @@ func (v *OpenAPI3Viewer) makeResponses(path string, route docs.DocOperation) map
 
 	result := v.makeResponsesFromMap(route.Responses)
 
-	maps.Copy(result, reponses)
-
-	return result
+	maps.Copy(reponses, result)
+	return reponses
 }
 
 func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs.DocPayload) map[string]Response {
@@ -373,6 +372,7 @@ func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs
 			v.logger.Error(err)
 			return nil
 		}
+
 		result[string(status)] = Response{
 			Description: response.Description,
 			Content: map[string]MediaType{
