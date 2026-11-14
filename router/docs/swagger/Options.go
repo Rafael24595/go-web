@@ -1,19 +1,9 @@
 package swagger
 
 import (
-	"errors"
 	"os"
 
 	"go.yaml.in/yaml/v3"
-)
-
-var (
-	// ErrInvalidDstType is returned when the destination value is not a pointer to a struct.
-	ErrInvalidDstType = errors.New("dst must be a non-nil pointer to a struct")
-	// ErrNilSrcType is returned when the source value is nil.
-	ErrNilSrcType = errors.New("src must be a non-nil struct or a pointer to a struct")
-	// ErrTypeMismatch is returned when the source and destination values are not of the same type.
-	ErrTypeMismatch = errors.New("both values must be structs of the same type")
 )
 
 // OpenAPI3ViewerOption sets part of the definition the viewer starts from.
