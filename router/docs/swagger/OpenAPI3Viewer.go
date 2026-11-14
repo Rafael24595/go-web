@@ -161,12 +161,21 @@ func (v *OpenAPI3Viewer) Handlers() []docs.DocViewerHandler {
 func (v *OpenAPI3Viewer) doc(w http.ResponseWriter, r *http.Request) {
 	v.build.Do(func() {
 		v.data.Components = *v.factory.components()
+
 		data, err := json.Marshal(v.data)
 		if err != nil {
 			v.logger.Error(err)
 		}
+
 		v.stringData = string(data)
 	})
+
+	if v.stringData == "" {
+		http.Error(w, "the OpenAPI definition could not be built", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 
 	_, err := w.Write([]byte(v.stringData))
 	if err != nil {
