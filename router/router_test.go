@@ -58,6 +58,13 @@ func (v *recordingViewer) RegisterRoute(route docs.DocOperation) docs.IDocViewer
 	return v
 }
 
+func recordGroup(calls *[]string, name string) RequestHandler {
+	return func(w http.ResponseWriter, req *http.Request, ctx *Context) result.Result {
+		*calls = append(*calls, name)
+		return result.Continue()
+	}
+}
+
 func TestNormalizeAddr(t *testing.T) {
 	tests := []struct {
 		name string
@@ -484,4 +491,56 @@ func TestRouteWithOptions_HandlersOfTheRoute(t *testing.T) {
 
 	res, _ = get(t, server.URL+"/global-error")
 	assert.Equal(t, http.StatusInternalServerError, res.StatusCode, "other routes keep the global handler")
+}
+
+func TestGroupContextualizer_BasePath(t *testing.T) {
+	var calls []string
+
+	router := NewRouterWithMux(nil).
+		BasePath("/v1").
+		GroupContextualizer(
+			recordGroup(&calls, "api"), "/api",
+		).
+		Route(http.MethodGet, text("ok"), "/api/x")
+
+	server := serve(t, router)
+	res, _ := get(t, server.URL+"/v1/api/x")
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.DeepEqual(t, []string{"api"}, calls)
+}
+
+func TestGroupContextualizer_WholeSegments(t *testing.T) {
+	var calls []string
+
+	router := NewRouterWithMux(nil).
+		GroupContextualizer(
+			recordGroup(&calls, "api"), "/api",
+		).
+		Route(http.MethodGet, text("ok"), "/apiary")
+
+	server := serve(t, router)
+	get(t, server.URL+"/apiary")
+
+	assert.Size(t, 0, calls)
+}
+
+func TestGroupContextualizer_OuterGroupsFirst(t *testing.T) {
+	for range 20 {
+		var calls []string
+
+		router := NewRouterWithMux(nil).
+			GroupContextualizer(
+				recordGroup(&calls, "admin"), "/api/admin",
+			).
+			GroupContextualizer(
+				recordGroup(&calls, "api"), "/api",
+			).
+			Route(http.MethodGet, text("ok"), "/api/admin/users")
+
+		server := serve(t, router)
+		get(t, server.URL+"/api/admin/users")
+
+		assert.DeepEqual(t, []string{"api", "admin"}, calls)
+	}
 }

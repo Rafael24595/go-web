@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-web/router/docs"
+	"github.com/Rafael24595/go-web/router/internal/paths"
 )
 
 const SWAGGER string = "SWAGGER"
@@ -235,24 +237,35 @@ func (v *OpenAPI3Viewer) RegisterRoute(route docs.DocOperation) docs.IDocViewer 
 func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []Parameter {
 	parameters := make([]Parameter, 0)
 
-	for k, h := range v.headers {
-		if strings.HasPrefix(path, k) {
-			for n, d := range h {
-				parameters = append(parameters, Parameter{
-					Name:        n,
-					In:          "header",
-					Description: d,
-					Required:    true,
-				})
-			}
+	groups := paths.Groups(
+		path, slices.Collect(maps.Keys(v.headers)),
+	)
+
+	for _, group := range groups {
+		headers := v.headers[group]
+		names := slices.Sorted(maps.Keys(headers))
+
+		for _, name := range names {
+			parameters = append(parameters, Parameter{
+				Name:        name,
+				In:          "header",
+				Description: headers[name],
+				Required:    true,
+			})
 		}
 	}
 
-	for k, h := range v.cookies {
-		if strings.HasPrefix(path, k) {
-			for n, d := range h {
-				parameters = append(parameters, v.makeCookie(n, d))
-			}
+	groups = paths.Groups(
+		path, slices.Collect(maps.Keys(v.cookies)),
+	)
+
+	for _, group := range groups {
+		cookies := v.cookies[group]
+		names := slices.Sorted(maps.Keys(cookies))
+
+		for _, name := range names {
+			cookie := v.makeCookie(name, cookies[name])
+			parameters = append(parameters, cookie)
 		}
 	}
 
@@ -365,10 +378,13 @@ func (v *OpenAPI3Viewer) makeFileRequest(route docs.DocOperation) (string, *Medi
 
 func (v *OpenAPI3Viewer) makeResponses(path string, route docs.DocOperation) map[string]Response {
 	reponses := make(map[string]Response)
-	for k, h := range v.responses {
-		if strings.HasPrefix(path, k) {
-			maps.Copy(reponses, h)
-		}
+
+	groups := paths.Groups(
+		path, slices.Collect(maps.Keys(v.responses)),
+	)
+
+	for _, group := range groups {
+		maps.Copy(reponses, v.responses[group])
 	}
 
 	result := v.makeResponsesFromMap(route.Responses)

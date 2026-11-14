@@ -643,12 +643,10 @@ func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (
 		ctx = NewContext()
 	}
 
-	group := strings.Split(req.Pattern, " ")[1]
-	keys := r.groupContextualizers.KeysVector().Filter(func(key string) bool {
-		return strings.HasPrefix(group, key)
-	})
+	path := strings.Split(req.Pattern, " ")[1]
+	groups := paths.Groups(path, r.groupContextualizers.KeysVector().Collect())
 
-	for _, key := range keys.Collect() {
+	for _, key := range groups {
 		funcs, ok := r.groupContextualizers.Get(key)
 		if !ok {
 			return ctx, nil
