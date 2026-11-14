@@ -238,7 +238,12 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 	for k, h := range v.headers {
 		if strings.HasPrefix(path, k) {
 			for n, d := range h {
-				parameters = append(parameters, v.makeParameter(n, d, "header"))
+				parameters = append(parameters, Parameter{
+					Name:        n,
+					In:          "header",
+					Description: d,
+					Required:    true,
+				})
 			}
 		}
 	}
@@ -253,13 +258,23 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 
 	if route.Parameters != nil {
 		for _, d := range route.Parameters {
-			parameters = append(parameters, v.makeParameter(d.Code, d.Description, "path"))
+			parameters = append(parameters, Parameter{
+				Name:        d.Code,
+				In:          "path",
+				Description: d.Description,
+				Required:    true,
+			})
 		}
 	}
 
 	if route.Query != nil {
 		for n, d := range route.Query {
-			parameters = append(parameters, v.makeParameter(n, d, "query"))
+			parameters = append(parameters, Parameter{
+				Name:        n,
+				In:          "query",
+				Description: d,
+				Required:    false,
+			})
 		}
 	}
 
@@ -273,20 +288,18 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 }
 
 func (v *OpenAPI3Viewer) makeCookie(name string, description string) Parameter {
-	cookie := v.makeParameter(name, description, "cookie")
+	cookie := Parameter{
+		Name:        name,
+		In:          "cookie",
+		Description: description,
+		Required:    false,
+	}
+
 	cookie.Schema = &Schema{
 		Type: "string",
 	}
-	return cookie
-}
 
-func (v *OpenAPI3Viewer) makeParameter(name, description, category string) Parameter {
-	return Parameter{
-		Name:        name,
-		In:          category,
-		Description: description,
-		Required:    true,
-	}
+	return cookie
 }
 
 func (v *OpenAPI3Viewer) makeRequest(route docs.DocOperation) *RequestBody {
