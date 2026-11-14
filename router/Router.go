@@ -219,10 +219,7 @@ func (r *Router) Contextualizer(handler contextHandler) *Router {
 // Returns the Router itself for fluent configuration.
 func (r *Router) GroupContextualizer(handler RequestHandler, group ...string) *Router {
 	for _, v := range group {
-		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
-		result.Append(handler)
-		r.groupContextualizers.Put(v, result)
+		r.addGroupContextualizer(r.basePath+v, handler)
 	}
 	return r
 }
@@ -237,14 +234,19 @@ func (r *Router) GroupContextualizer(handler RequestHandler, group ...string) *R
 // Returns the Router itself for fluent configuration.
 func (r *Router) GroupContextualizerDocument(handler RequestHandler, doc docs.DocGroup, group ...string) *Router {
 	for _, v := range group {
-		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
-		result.Append(handler)
-		path := fmt.Sprintf("%s%s", r.basePath, v)
-		r.groupContextualizers.Put(path, result)
+		path := r.basePath + v
+		r.addGroupContextualizer(path, handler)
 		r.docViewer.RegisterGroup(path, doc)
 	}
 	return r
+}
+
+func (r *Router) addGroupContextualizer(path string, handler RequestHandler) {
+	handlers, _ := r.groupContextualizers.
+		PutIfAbsent(path, *collection.VectorEmpty[RequestHandler]())
+
+	handlers.Append(handler)
+	r.groupContextualizers.Put(path, handlers)
 }
 
 // ErrorHandler registers a global error handler.
