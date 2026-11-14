@@ -300,6 +300,10 @@ func (v *OpenAPI3Viewer) makeRequest(route docs.DocOperation) *RequestBody {
 		content[contentType] = *media
 	}
 
+	if len(content) == 0 {
+		return nil
+	}
+
 	return &RequestBody{
 		Description: route.Request.Description,
 		Content:     content,
