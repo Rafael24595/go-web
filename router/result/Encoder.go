@@ -92,7 +92,7 @@ func (e *textEncoder) Encode(payload any) ([]byte, error) {
 	switch t.Kind() {
 	case reflect.String:
 		return []byte(payload.(string)), nil
-	case reflect.Ptr, reflect.Struct, reflect.Map, reflect.Array, reflect.Slice:
+	case reflect.Pointer, reflect.Struct, reflect.Map, reflect.Array, reflect.Slice:
 		return NewJsonEncoder().Encode(payload)
 	default:
 		payloadStr := fmt.Sprintf("%v", payload)
@@ -103,6 +103,6 @@ func (e *textEncoder) Encode(payload any) ([]byte, error) {
 // Headers returns the HTTP Content-Type header for plain-text responses.
 func (e *textEncoder) Headers() map[string]string {
 	return map[string]string{
-		"Content-Type": "text/plain",
+		"Content-Type": "text/plain; charset=utf-8",
 	}
 }

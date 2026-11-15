@@ -6,7 +6,7 @@ import (
 	"github.com/Rafael24595/go-web/router"
 	"github.com/Rafael24595/go-web/test/support"
 
-	assert "github.com/Rafael24595/go-assert/assert/test"
+	"github.com/Rafael24595/go-assert/assert"
 )
 
 func TestInputBytesOffline(t *testing.T) {
@@ -46,7 +46,7 @@ func TestInputBytesWithOpts_StrictLimit(t *testing.T) {
 	data, res := router.InputBytesWithOpts(w, req, opts)
 
 	assert.NotNil(t, res)
-	assert.Len(t, 5, data)
+	assert.Size(t, 5, data)
 }
 
 func TestInputText(t *testing.T) {

@@ -12,11 +12,11 @@ type Cors struct {
 	allowCredentials bool
 }
 
-// EmptyCors creates a new Cors instance with all fields empty or disabled.
+// NewCors creates a new Cors instance with all fields empty or disabled.
 //
 // By default, no origins, methods, or headers are allowed, and credentials
 // are not permitted. Use the builder-style methods to configure it.
-func EmptyCors() *Cors {
+func NewCors() *Cors {
 	return &Cors{
 		allowedOrigins:   make([]string, 0),
 		allowedMethods:   make([]string, 0),
@@ -25,30 +25,34 @@ func EmptyCors() *Cors {
 	}
 }
 
-// PermissiveCors returns a Cors instance configured with a fully permissive policy.
+// PermissiveCors returns a Cors instance that lets any origin call the API
+// without credentials.
 //
 // The configuration allows:
 //   - Any origin (`*`)
 //   - HTTP methods: GET, POST, PUT, DELETE, OPTIONS
 //   - Headers: Content-Type, Authorization
-//   - Credentials (cookies, HTTP auth)
 //
-// This is useful for development, testing, or internal services where
-// strict CORS rules are not required. For production, it is generally
-// recommended to configure CORS explicitly using EmptyCors() and the
-// builder methods.
+// Credentials (cookies, HTTP authentication) are not allowed: together with
+// any origin they would let every website send requests with the user's
+// cookies and read the answers. A token sent by the client in the
+// Authorization header still works, because it is not a credential in the
+// CORS sense. To accept cookies from other origins, list those origins
+// explicitly with NewCors().AllowedOrigins(...).AllowCredentials().
+//
+// This is useful for development, testing, or public APIs. For production
+// services, configure CORS explicitly using NewCors() and the builder methods.
 func PermissiveCors() *Cors {
-	return EmptyCors().
+	return NewCors().
 		AllowedOrigins("*").
 		AllowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS").
-		AllowedHeaders("Content-Type", "Authorization").
-		AllowCredentials()
+		AllowedHeaders("Content-Type", "Authorization")
 }
 
 // AllowedOrigins sets the list of allowed origins for CORS requests.
 //
 // Example:
-//   cors := EmptyCors().AllowedOrigins("https://example.com", "https://api.example.com")
+//   cors := NewCors().AllowedOrigins("https://example.com", "https://api.example.com")
 //
 // Returns the Cors instance for fluent configuration.
 func (c *Cors) AllowedOrigins(allowedOrigins ...string) *Cors {
@@ -59,7 +63,7 @@ func (c *Cors) AllowedOrigins(allowedOrigins ...string) *Cors {
 // AllowedMethods sets the list of allowed HTTP methods for CORS requests.
 //
 // Example:
-//   cors := EmptyCors().AllowedMethods("GET", "POST", "PUT")
+//   cors := NewCors().AllowedMethods("GET", "POST", "PUT")
 //
 // Returns the Cors instance for fluent configuration.
 func (c *Cors) AllowedMethods(allowedMethods ...string) *Cors {
@@ -70,7 +74,7 @@ func (c *Cors) AllowedMethods(allowedMethods ...string) *Cors {
 // AllowedHeaders sets the list of allowed HTTP headers for CORS requests.
 //
 // Example:
-//   cors := EmptyCors().AllowedHeaders("Content-Type", "Authorization")
+//   cors := NewCors().AllowedHeaders("Content-Type", "Authorization")
 //
 // Returns the Cors instance for fluent configuration.
 func (c *Cors) AllowedHeaders(allowedHeaders ...string) *Cors {
@@ -111,4 +115,24 @@ func (c *Cors) IsEmpty() bool {
 // allowed origin, method, or header defined.
 func (c *Cors) IsNotEmpty() bool {
 	return !c.IsEmpty()
+}
+
+func (c Cors) allowOrigin(origin string) (string, bool) {
+	for _, allowed := range c.allowedOrigins {
+		if allowed == origin {
+			return origin, true
+		}
+
+		if allowed != "*" {
+			continue
+		}
+
+		if c.allowCredentials {
+			return origin, true
+		}
+
+		return "*", true
+	}
+
+	return "", false
 }

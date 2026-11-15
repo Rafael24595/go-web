@@ -52,12 +52,17 @@ type InputOpts struct {
 //	    return result.BytesOk(data)
 //	}
 func InputBytes(r *http.Request) ([]byte, *result.Result) {
-	defer r.Body.Close()
-
 	raw, res := readAllBytes(r)
 	if res != nil {
 		return raw, res
 	}
+
+	err := r.Body.Close()
+	if err != nil {
+		res := result.Err(500, err)
+		return raw, &res
+	}
+
 	return raw, nil
 }
 
@@ -167,12 +172,17 @@ func InputXml[T any](r *http.Request) (T, *result.Result) {
 //	    return result.BytesOk(data)
 //	}
 func InputBytesWithOpts(w http.ResponseWriter, r *http.Request, opts InputOpts) ([]byte, *result.Result) {
-	defer r.Body.Close()
-
 	raw, res := readOptBytes(w, r, opts.Limit, opts.Strict)
 	if res != nil {
 		return raw, res
 	}
+
+	err := r.Body.Close()
+	if err != nil {
+		res := result.Err(500, err)
+		return raw, &res
+	}
+
 	return raw, nil
 }
 

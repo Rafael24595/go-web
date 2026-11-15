@@ -1,17 +1,34 @@
 package router
 
 import (
-	"fmt"
 	stdlog "log"
+
+	"context"
+	"errors"
+	"time"
+
+	"fmt"
+	"net"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/Rafael24595/go-assert/invariant"
 	"github.com/Rafael24595/go-collections/collection"
 	"github.com/Rafael24595/go-log/log"
 	"github.com/Rafael24595/go-log/log/record"
-	"github.com/Rafael24595/go-web/router/configuration"
 	"github.com/Rafael24595/go-web/router/docs"
+	"github.com/Rafael24595/go-web/router/internal/paths"
 	"github.com/Rafael24595/go-web/router/result"
+)
+
+const (
+	// Base is the key used to register global handlers (contextualizer, error, panic)
+	Base = "$BASE"
+	// DefaultShutdownTimeout is how long in-flight requests get to finish when
+	// the router's context is done, unless ShutdownTimeout sets another value.
+	DefaultShutdownTimeout = 5 * time.Second
 )
 
 type contextHandler = func(http.ResponseWriter, *http.Request) (*Context, error)
@@ -19,80 +36,48 @@ type RequestHandler = func(http.ResponseWriter, *http.Request, *Context) result.
 type errorHandler = func(http.ResponseWriter, *http.Request, *Context, result.Result)
 type panicHandler = func(http.ResponseWriter, *http.Request, any)
 
-const BASE = "$BASE"
+// Middleware wraps the router's handler. Registered with Router.Use.
+type Middleware func(http.Handler) http.Handler
 
-// HandlerOptions represents advanced configuration for a route handler.
-//
-// It allows attaching optional handlers for:
-//   - request context initialization
-//   - error handling
-//   - panic recovery
-//
-// Use NewHandlerOptions to create a new instance, and the builder-style
-// methods (Context, Error, Panic) to configure it.
-type HandlerOptions struct {
-	handler RequestHandler
-	context *contextHandler
-	error   *errorHandler
-	panic   *panicHandler
-}
+// OnListenFn receives the address a server is listening on; see Router.OnListen.
+type OnListenFn func(net.Addr)
 
-// NewHandlerOptions creates a new HandlerOptions instance for the given
-// route handler. By default, no context, error, or panic handlers are set.
-func NewHandlerOptions(handler RequestHandler) *HandlerOptions {
-	return &HandlerOptions{
-		handler: handler,
-	}
-}
+// ErrTLSStrategyRequired is returned by ListenTLS and ListenWithTLS when the
+// TLS strategy is nil.
+var ErrTLSStrategyRequired = errors.New("router: a TLS strategy is required")
 
-// Context sets a context initializer for the handler.
+// Router is the main entry point for defining and running HTTP routes.
 //
-// The contextualizer runs before the route logic and can build a request-
-// scoped context dictionary (e.g., user info, DB connections, metadata).
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Context(context *contextHandler) *HandlerOptions {
-	h.context = context
-	return h
-}
-
-// Error sets a custom error handler for the route.
-//
-// The error handler runs when the route handler returns an error or fails.
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Error(error *errorHandler) *HandlerOptions {
-	h.error = error
-	return h
-}
-
-// Panic sets a custom panic handler for the route.
-//
-// The panic handler is called if the route panics during execution.
-// This allows fine-grained recovery logic for individual routes.
-//
-// Returns the HandlerOptions itself for fluent configuration.
-func (h *HandlerOptions) Panic(panic *panicHandler) *HandlerOptions {
-	h.panic = panic
-	return h
-}
-
+// It provides methods to register routes, contextualizers, error handlers,
 type Router struct {
-	logger               log.Log
+	logger log.Log
+	trace  bool
+
+	server          *http.ServeMux
+	ctx             context.Context
+	shutdownTimeout time.Duration
+
 	contextualizer       collection.IDictionary[string, contextHandler]
 	groupContextualizers collection.IDictionary[string, collection.Vector[RequestHandler]]
 	errors               collection.IDictionary[string, errorHandler]
 	panics               collection.IDictionary[string, panicHandler]
 	routes               collection.IDictionary[string, RequestHandler]
-	basePath             string
-	cors                 *Cors
-	docViewer            docs.IDocViewer
+
+	basePath   string
+	middleware []Middleware
+	cors       *Cors
+
+	docViewer docs.IDocViewer
+	onListen  func(net.Addr)
 }
 
-// NewRouter creates and initializes a new Router instance with sensible defaults.
+// NewRouter creates a Router that registers its routes on http.DefaultServeMux.
+// Only one such router can declare a given route per process; use
+// NewRouterWithMux when several routers live in the same process, as in tests.
 //
 // The router comes with:
 //   - a default logger
+//   - an HTTP server using the default ServeMux
 //   - empty collections for routes, error handlers, panic handlers, and contextualizers
 //   - an empty base path
 //   - default CORS configuration
@@ -100,14 +85,29 @@ type Router struct {
 //
 // Use this function as the entry point to build and configure a new Router.
 func NewRouter() *Router {
+	return NewRouterWithMux(http.DefaultServeMux)
+}
+
+// NewRouterWithMux creates a Router that registers its routes on mux.
+// A nil mux creates a new one.
+func NewRouterWithMux(server *http.ServeMux) *Router {
+	if server == nil {
+		server = http.NewServeMux()
+	}
+
 	return &Router{
 		logger:               log.Default(),
+		trace:                false,
+		server:               server,
+		ctx:                  context.Background(),
+		shutdownTimeout:      DefaultShutdownTimeout,
 		contextualizer:       collection.DictionaryEmpty[string, contextHandler](),
 		groupContextualizers: collection.DictionaryEmpty[string, collection.Vector[RequestHandler]](),
 		errors:               collection.DictionaryEmpty[string, errorHandler](),
+		panics:               collection.DictionaryEmpty[string, panicHandler](),
 		routes:               collection.DictionaryEmpty[string, RequestHandler](),
 		basePath:             "",
-		cors:                 EmptyCors(),
+		cors:                 NewCors(),
 		docViewer:            docs.VoidViewer(),
 	}
 }
@@ -124,6 +124,51 @@ func (r *Router) Logger(logger log.Log) *Router {
 	return r
 }
 
+// TraceRequests logs the client address and the route pattern of every
+// request it handles.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) TraceRequests(trace bool) *Router {
+	r.trace = trace
+	return r
+}
+
+// Context ties the servers started by Listen, ListenTLS and ListenWithTLS
+// to ctx: when ctx is done they stop accepting connections, give in-flight
+// requests up to the shutdown timeout to finish, and the Listen call returns.
+// A context that is already done makes Listen return at once. Without a
+// context the servers run until the process ends.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) Context(ctx context.Context) *Router {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	r.ctx = ctx
+	return r
+}
+
+// ShutdownTimeout sets how long in-flight requests get to finish once the
+// router's context is done. The default is DefaultShutdownTimeout.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) ShutdownTimeout(timeout time.Duration) *Router {
+	r.shutdownTimeout = timeout
+	return r
+}
+
+// OnListen registers a function called with the actual address once a server
+// is listening and before it serves requests: useful to open a browser, to
+// learn the port chosen for ":0", or to signal readiness. It is not called
+// when the address cannot be used. ListenWithTLS calls it once per server.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) OnListen(fn OnListenFn) *Router {
+	r.onListen = fn
+	return r
+}
+
 // DocViewer registers a documentation viewer responsible for exposing
 // documentation endpoints.
 //
@@ -134,7 +179,7 @@ func (r *Router) Logger(logger log.Log) *Router {
 func (r *Router) DocViewer(viewer docs.IDocViewer) *Router {
 	for _, v := range viewer.Handlers() {
 		pattern := fmt.Sprintf("%s %s", v.Method, v.Route)
-		http.HandleFunc(pattern, v.Handler)
+		r.server.HandleFunc(pattern, v.Handler)
 	}
 	r.docViewer = viewer
 	return r
@@ -160,7 +205,7 @@ func (r *Router) BasePath(basePath string) *Router {
 func (r *Router) ResourcesPath(path string) *Router {
 	fs := http.FileServer(http.Dir(path))
 	route := fmt.Sprintf("/%s/", path)
-	http.Handle(fmt.Sprintf("GET %s", route), http.StripPrefix(route, fs))
+	r.server.Handle(fmt.Sprintf("GET %s", route), http.StripPrefix(route, fs))
 	return r
 }
 
@@ -172,7 +217,7 @@ func (r *Router) ResourcesPath(path string) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) Contextualizer(handler contextHandler) *Router {
-	r.contextualizer.Put(BASE, handler)
+	r.contextualizer.Put(Base, handler)
 	return r
 }
 
@@ -185,10 +230,7 @@ func (r *Router) Contextualizer(handler contextHandler) *Router {
 // Returns the Router itself for fluent configuration.
 func (r *Router) GroupContextualizer(handler RequestHandler, group ...string) *Router {
 	for _, v := range group {
-		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
-		result.Append(handler)
-		r.groupContextualizers.Put(v, result)
+		r.addGroupContextualizer(r.basePath+v, handler)
 	}
 	return r
 }
@@ -203,14 +245,19 @@ func (r *Router) GroupContextualizer(handler RequestHandler, group ...string) *R
 // Returns the Router itself for fluent configuration.
 func (r *Router) GroupContextualizerDocument(handler RequestHandler, doc docs.DocGroup, group ...string) *Router {
 	for _, v := range group {
-		result, _ := r.groupContextualizers.
-			PutIfAbsent(v, *collection.VectorEmpty[RequestHandler]())
-		result.Append(handler)
-		path := fmt.Sprintf("%s%s", r.basePath, v)
-		r.groupContextualizers.Put(path, result)
+		path := r.basePath + v
+		r.addGroupContextualizer(path, handler)
 		r.docViewer.RegisterGroup(path, doc)
 	}
 	return r
+}
+
+func (r *Router) addGroupContextualizer(path string, handler RequestHandler) {
+	handlers, _ := r.groupContextualizers.
+		PutIfAbsent(path, *collection.VectorEmpty[RequestHandler]())
+
+	handlers.Append(handler)
+	r.groupContextualizers.Put(path, handlers)
 }
 
 // ErrorHandler registers a global error handler.
@@ -221,7 +268,7 @@ func (r *Router) GroupContextualizerDocument(handler RequestHandler, doc docs.Do
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) ErrorHandler(handler errorHandler) *Router {
-	r.errors.Put(BASE, handler)
+	r.errors.Put(Base, handler)
 	return r
 }
 
@@ -235,92 +282,87 @@ func (r *Router) ErrorHandler(handler errorHandler) *Router {
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) PanicHandler(handler panicHandler) *Router {
-	r.panics.Put(BASE, handler)
+	r.panics.Put(Base, handler)
 	return r
 }
 
-// Route registers a basic route with default handler options.
-//
-// This is a shorthand for RouteWithOptions where only the handler is provided.
-// Use this when you don’t need documentation or advanced configuration.
+// Route registers a route; params fill the %s verbs of the pattern. The route
+// is served but left out of the documentation viewer: use RouteDocument, or
+// RouteWithOptions with WithDocs, to document it.
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) Route(method string, handler RequestHandler, pattern string, params ...any) *Router {
-	return r.RouteWithOptions(method, NewHandlerOptions(handler), pattern, params...)
+	return r.RouteWithOptions(method, handler, pattern, WithParams(params...))
 }
 
-// RouteWithOptions registers a basic route with advanced handler options.
-//
-// Use this when you need to configure context, error, or panic handling
-// at the route level, without attaching documentation.
-//
-// Returns the Router itself for fluent configuration.
-func (r *Router) RouteWithOptions(method string, options *HandlerOptions, pattern string, params ...any) *Router {
-	return r.route(method, pattern, options, docs.DocOperation{}, params...)
-}
-
-// RouteDocument registers a documented route with default handler options.
-//
-// This is a shorthand for RouteDocumentWithOptions where only the handler
-// is provided. Use this when you don’t need custom context, error, or panic
-// handlers.
+// RouteDocument registers a route and documents it; it is a shorthand for
+// RouteWithOptions with WithDocs.
 //
 // Returns the Router itself for fluent configuration.
 func (r *Router) RouteDocument(method string, handler RequestHandler, pattern string, doc docs.DocRoute) *Router {
-	return r.RouteDocumentWithOptions(method, NewHandlerOptions(handler), pattern, doc)
+	return r.RouteWithOptions(method, handler, pattern, WithDocs(doc))
 }
 
-// RouteDocumentWithOptions registers a documented route with advanced handler options.
+// RouteWithOptions registers a route configured by options: its parameters
+// (WithParams), its own contextualizer, error or panic handler (WithContext,
+// WithError, WithPanic) and its documentation (WithDocs).
 //
-// The documentation payload describes request parameters, queries, cookies,
-// file uploads, request body, and possible responses. HandlerOptions may
-// define custom context, error, or panic behavior for this route.
+// A nil handler is a programming error: debug builds panic, release builds
+// skip the route.
 //
 // Returns the Router itself for fluent configuration.
-func (r *Router) RouteDocumentWithOptions(method string, options *HandlerOptions, pattern string, doc docs.DocRoute) *Router {
-	params := make([]any, 0)
-	for _, p := range doc.Parameters {
-		params = append(params, p.Code)
+func (r *Router) RouteWithOptions(method string, handler RequestHandler, pattern string, options ...RouteOption) *Router {
+	if handler == nil {
+		invariant.Unreachable(
+			fmt.Sprintf("router: nil handler for %s %s", method, pattern),
+		)
+		return r
 	}
 
-	docRoute := docs.DocOperation{
-		Description: doc.Description,
-		Parameters:  doc.Parameters,
-		Query:       doc.Query,
-		Cookies:     doc.Cookies,
-		Files:       doc.Files,
-		Request:     doc.Request,
-		Responses:   doc.Responses,
-		Tags:        doc.Tags,
+	routeSpec := routeSpec{
+		method:  method,
+		pattern: pattern,
 	}
 
-	return r.route(method, pattern, options, docRoute, params...)
+	for _, option := range options {
+		if option.resolve != nil {
+			option.resolve(&routeSpec)
+		}
+	}
+
+	route := r.patternKey(routeSpec.method, routeSpec.pattern, routeSpec.params...)
+
+	r.routes.Put(route, handler)
+	r.server.HandleFunc(route, r.handler)
+
+	resultSpec := resultSpec{
+		route:     route,
+		routeSpec: routeSpec,
+	}
+
+	for _, option := range options {
+		if option.register != nil {
+			option.register(r, resultSpec)
+		}
+	}
+
+	return r
 }
 
-func (r *Router) route(method string, pattern string, options *HandlerOptions, doc docs.DocOperation, params ...any) *Router {
-	route := r.patternKey(method, pattern, params...)
-
-	if options != nil && options.context != nil {
-		r.contextualizer.Put(route, *options.context)
+// Use adds middlewares around every route served by Listen, ListenTLS,
+// ListenWithTLS and Handler. The first one added is the outermost. They run
+// after the built-in CORS handling: preflight requests are answered before
+// reaching them, and their responses (a 403 from a Host check, for instance)
+// already carry the CORS headers, so cross-origin clients can read them.
+// They are not applied to the HTTP-to-HTTPS redirect server of ListenWithTLS.
+//
+// Returns the Router itself for fluent configuration.
+func (r *Router) Use(middlewares ...Middleware) *Router {
+	for _, m := range middlewares {
+		if m != nil {
+			r.middleware = append(r.middleware, m)
+		}
 	}
-
-	if options != nil && options.error != nil {
-		r.errors.Put(route, *options.error)
-	}
-
-	if options != nil && options.panic != nil {
-		r.panics.Put(route, *options.panic)
-	}
-
-	r.routes.Put(route, options.handler)
-	http.HandleFunc(route, r.handler)
-
-	doc.Method = method
-	doc.BasePath = r.basePath
-	doc.Path = fmt.Sprintf(pattern, params...)
-
-	r.docViewer.RegisterRoute(doc)
-
 	return r
 }
 
@@ -335,91 +377,193 @@ func (r *Router) Cors(cors *Cors) *Router {
 	return r
 }
 
-// Listen starts an HTTP server on the given host.
-//
-// Example:
-//
-//	router.Listen(8080)
-//
-// CORS and other startup middlewares are automatically applied.
-func (r *Router) Listen(host int) error {
-	port := fmt.Sprintf(":%d", host)
-	
-	middleware := make([]middleware, 0)
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
-	}
-	
-	return r.listen(port, middleware)
+// Handler returns the router as an http.Handler with CORS and the middlewares
+// added with Use applied. Prefer Listen, ListenTLS and ListenWithTLS, which
+// also manage the server's lifetime; use Handler for tests (httptest.NewServer)
+// or to mount the router inside a server you build yourself.
+func (r *Router) Handler() http.Handler {
+	return r.serving()
 }
 
-// ListenTLS starts an HTTPS server on the given host with TLS enabled.
+// Listen starts an HTTP server on addr (":8080", "127.0.0.1:8080"; a number
+// alone is a port) and blocks until it stops. It returns nil when the router's
+// context ends the server, and an error if addr cannot be used, the server
+// fails, or in-flight requests outlive the shutdown timeout.
 //
-// Requires a certificate and private key.
-//
-// Example:
-//
-//	router.ListenTLS(8443, "server.crt", "server.key")
-func (r *Router) ListenTLS(hostTLS int, certTLS, keyTLS string) error {
-	portTLS := fmt.Sprintf(":%d", hostTLS)
+//	router.Listen(":8080", router.WithReadHeaderTimeout(10*time.Second))
+func (r *Router) Listen(addr string, options ...ServerOption) error {
+	addr = normalizeAddr(addr)
+	handler := r.serving()
 
-	middleware := make([]middleware, 0)
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
-	}
+	server := r.newServer(addr, handler, options...)
+	strategy := servePlain()
 
-	return r.listenTLS(portTLS, certTLS, keyTLS, middleware)
+	return r.run(r.ctx, server, strategy)
 }
 
-// ListenWithTLS starts both HTTP and HTTPS servers in parallel.
+// ListenTLS is Listen over HTTPS, with the certificate given by tls.
 //
-// The HTTP server listens on the first host and automatically redirects
-// all requests to the HTTPS server. The HTTPS server listens on the
-// second host using the provided certificate and key.
-//
-// Example:
-//
-//	router.ListenWithTLS(8080, 8443, "server.crt", "server.key")
-func (r *Router) ListenWithTLS(host, hostTLS int, certTLS, keyTLS string) error {
-	middleware := make([]middleware, 0)
-	middleware = append(middleware, httpsRedirectMiddleware(hostTLS))
-
-	if r.cors.IsNotEmpty() {
-		middleware = append(middleware, corsMiddleware(*r.cors))
+//	router.ListenTLS(":8443", router.TLSFromFiles("server.crt", "server.key"))
+func (r *Router) ListenTLS(
+	addr string,
+	tls TLSStrategy,
+	options ...ServerOption,
+) error {
+	if tls == nil {
+		return ErrTLSStrategyRequired
 	}
 
+	addr = normalizeAddr(addr)
+	handler := r.serving()
+
+	server := r.newServer(addr, handler, options...)
+
+	strategy, err := tls()
+	if err != nil {
+		return err
+	}
+
+	return r.run(r.ctx, server, strategy)
+}
+
+// ListenWithTLS runs an HTTP server on addr that redirects every request
+// (308) to an HTTPS server on addrTLS. When either server stops, the other
+// one is stopped too.
+//
+//	router.ListenWithTLS(":8080", ":8443", router.TLSFromFiles("server.crt", "server.key"))
+func (r *Router) ListenWithTLS(
+	addr, addrTLS string,
+	tls TLSStrategy,
+	options ...ServerOption,
+) error {
+	if tls == nil {
+		return ErrTLSStrategyRequired
+	}
+
+	addr = normalizeAddr(addr)
+	addrTLS = normalizeAddr(addrTLS)
+
+	ctx, cancel := context.WithCancel(r.ctx)
+	defer cancel()
+
+	strategy, err := tls()
+	if err != nil {
+		return err
+	}
+
+	plain := make(chan error, 1)
 	go func() {
-		port := fmt.Sprintf(":%d", host)
-		if err := r.listen(port, middleware); err != nil {
-			r.logger.Error(err)
-		}
+		defer cancel()
+		handler := applyInterceptor(
+			r.server, httpsRedirectInterceptor(addrTLS),
+		)
+
+		server := r.newServer(addr, handler, options...)
+		strategy := servePlain()
+
+		plain <- r.run(ctx, server, strategy)
 	}()
 
-	return r.ListenTLS(hostTLS, certTLS, keyTLS)
+	handler := r.serving()
+	server := r.newServer(addrTLS, handler, options...)
+
+	err = r.run(ctx, server, strategy)
+	cancel()
+
+	return errors.Join(err, <-plain)
 }
 
-func (r *Router) listenTLS(hostTLS, certTLS, keyTLS string, middleware []middleware) error {
-	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
-	server := &http.Server{
-		Addr:     hostTLS,
-		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(writer, "", 0),
+func (r *Router) serving() http.Handler {
+	var handler http.Handler = r.server
+	for _, v := range slices.Backward(r.middleware) {
+		handler = v(handler)
 	}
 
-	r.logger.Messagef("The app is listen at: %s with TLS", hostTLS)
-	return server.ListenAndServeTLS(certTLS, keyTLS)
+	if r.cors.IsEmpty() {
+		return handler
+	}
+
+	return applyInterceptor(
+		handler, corsInterceptor(*r.cors),
+	)
 }
 
-func (r *Router) listen(host string, middleware []middleware) error {
-	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
-	server := &http.Server{
-		Addr:     host,
-		Handler:  applyMiddleware(http.DefaultServeMux, middleware),
-		ErrorLog: stdlog.New(writer, "", 0),
+func (r *Router) newServer(
+	addr string,
+	handler http.Handler,
+	options ...ServerOption,
+) *http.Server {
+	server := &http.Server{}
+
+	for _, option := range options {
+		if option != nil {
+			option(server)
+		}
 	}
 
-	r.logger.Messagef("The app is listen at: %s", host)
-	return server.ListenAndServe()
+	writer := log.NewWriterFromCategory(r.logger, record.WARNING)
+
+	server.Addr = addr
+	server.Handler = handler
+	server.ErrorLog = stdlog.New(writer, "", 0)
+
+	return server
+}
+
+func (r *Router) run(ctx context.Context, server *http.Server, strategy serveStrategy) error {
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+
+	r.logger.Messagef("The app is listening at %s://%s", strategy.scheme, listener.Addr())
+
+	if r.onListen != nil {
+		r.onListen(listener.Addr())
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan error, 1)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-done:
+			stopped <- nil
+			return
+		}
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.shutdownTimeout)
+		defer cancel()
+		stopped <- server.Shutdown(shutdownCtx)
+	}()
+
+	err = strategy.serve(server, listener)
+
+	if !errors.Is(err, http.ErrServerClosed) {
+		close(done)
+
+		stopErr := <-stopped
+		if stopErr != nil {
+			return errors.Join(err, stopErr)
+		}
+
+		return err
+	}
+
+	return <-stopped
+}
+
+func normalizeAddr(addr string) string {
+	if addr == "" {
+		return addr
+	}
+
+	if _, err := strconv.Atoi(addr); err == nil {
+		return net.JoinHostPort("", addr)
+	}
+
+	return addr
 }
 
 // ViewerSources retrieves the list of documentation sources currently
@@ -450,15 +594,16 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	config := configuration.Instance()
-	if config.Dev() && config.TraceRequest() {
+	if r.trace {
 		message := fmt.Sprintf("%s - %s", req.RemoteAddr, req.Pattern)
 		r.logger.Custom("DEV-REQUEST", message)
 	}
 
 	handler, ok := r.routes.Get(req.Pattern)
 	if !ok {
+		http.NotFound(wrt, req)
 		r.logger.Errors("Request handler not found")
+		return
 	}
 
 	ctx, ctxResult := r.initializeContext(wrt, req)
@@ -483,7 +628,7 @@ func (r *Router) handler(wrt http.ResponseWriter, req *http.Request) {
 func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (*Context, *result.Result) {
 	contextualizer, ok := r.contextualizer.Get(req.Pattern)
 	if !ok {
-		contextualizer, ok = r.contextualizer.Get(BASE)
+		contextualizer, ok = r.contextualizer.Get(Base)
 	}
 
 	var ctx *Context
@@ -499,12 +644,10 @@ func (r *Router) initializeContext(wrt http.ResponseWriter, req *http.Request) (
 		ctx = NewContext()
 	}
 
-	group := strings.Split(req.Pattern, " ")[1]
-	keys := r.groupContextualizers.KeysVector().Filter(func(key string) bool {
-		return strings.HasPrefix(group, key)
-	})
+	path := strings.Split(req.Pattern, " ")[1]
+	groups := paths.Groups(path, r.groupContextualizers.KeysVector().Collect())
 
-	for _, key := range keys.Collect() {
+	for _, key := range groups {
 		funcs, ok := r.groupContextualizers.Get(key)
 		if !ok {
 			return ctx, nil
@@ -531,8 +674,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 	}
 
 	if result.Err() {
-		http.Error(wrt, string(encode), result.Status())
-		return
+		wrt.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 
 	if result.File() {
@@ -540,11 +682,11 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 		return
 	}
 
-	wrt.WriteHeader(result.Status())
-
 	for k, v := range encoder.Headers() {
 		wrt.Header().Set(k, v)
 	}
+
+	wrt.WriteHeader(result.Status())
 
 	_, err = wrt.Write(encode)
 	if err != nil {
@@ -556,7 +698,7 @@ func (r *Router) manageOk(wrt http.ResponseWriter, req *http.Request, result res
 func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *Context, result result.Result) {
 	errorHandler, ok := r.errors.Get(req.Pattern)
 	if !ok {
-		errorHandler, ok = r.errors.Get(BASE)
+		errorHandler, ok = r.errors.Get(Base)
 	}
 
 	if ok {
@@ -570,7 +712,7 @@ func (r *Router) manageErr(wrt http.ResponseWriter, req *http.Request, context *
 func (r *Router) managePanic(wrt http.ResponseWriter, req *http.Request, rec any) {
 	panicHandler, ok := r.panics.Get(req.Pattern)
 	if !ok {
-		panicHandler, ok = r.panics.Get(BASE)
+		panicHandler, ok = r.panics.Get(Base)
 	}
 
 	if ok {

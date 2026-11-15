@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
-	"github.com/Rafael24595/go-web/router/docs"
-	"github.com/Rafael24595/go-log/log"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
-	"gopkg.in/yaml.v3"
+
+	"github.com/Rafael24595/go-log/log"
+	"github.com/Rafael24595/go-web/router/docs"
+	"github.com/Rafael24595/go-web/router/internal/paths"
 )
 
 const SWAGGER string = "SWAGGER"
@@ -20,23 +22,13 @@ const SWAGGER string = "SWAGGER"
 const SWAGGER_ROUTE = "/swagger/"
 const SWAGGER_JSON = "/swagger/doc.json"
 
-// OpenAPI3ViewerOptions defines the configuration for the OpenAPI 3.0 viewer.
-type OpenAPI3ViewerOptions struct {
-	Version   string // API version
-	EnableTLS bool   // Whether to expose an HTTPS server URL
-	OnlyTLS   bool   // Whether to expose only HTTPS server URL
-	Port      int    // HTTP port
-	PortTLS   int    // HTTPS port
-	FileYML   string // Path to an existing OpenAPI YAML file to preload
-}
-
 // OpenAPI3Viewer implements the docs.IDocViewer interface
 // and exposes API documentation in OpenAPI 3.0 format.
 type OpenAPI3Viewer struct {
 	build      sync.Once
 	logger     log.Log
 	data       OpenAPI3
-	factory    *FactoryStructToSchema
+	factory    *schemaFactory
 	headers    map[string]map[string]string
 	cookies    map[string]map[string]string
 	responses  map[string]map[string]Response
@@ -48,7 +40,7 @@ func NewViewer() *OpenAPI3Viewer {
 	return &OpenAPI3Viewer{
 		data:       OpenAPI3{},
 		logger:     log.Default(),
-		factory:    NewFactoryStructToSchema(),
+		factory:    newSchemaFactory(),
 		headers:    make(map[string]map[string]string),
 		cookies:    make(map[string]map[string]string),
 		responses:  make(map[string]map[string]Response),
@@ -57,48 +49,40 @@ func NewViewer() *OpenAPI3Viewer {
 }
 
 // Logger sets the logger for the viewer and returns itself.
-func (v *OpenAPI3Viewer) Logger(logger log.Log) docs.IDocViewer {
+func (v *OpenAPI3Viewer) Logger(logger log.Log) *OpenAPI3Viewer {
 	v.logger = logger
 	return v
 }
 
-// Load loads the OpenAPI 3 specification from a YAML file,
-// and configures server URLs based on the provided options.
-//
-// It automatically registers `http://localhost:{Port}` if OnlyTLS is false,
-// and `https://localhost:{PortTLS}` if EnableTLS is true.
-func (v *OpenAPI3Viewer) Load(options OpenAPI3ViewerOptions) docs.IDocViewer {
-	data, err := loadYAML(options.FileYML)
+// Load sets the definition the viewer starts from: OpenAPI 3.0.0, the fields
+// set by options (applied in order) and this server ("/") as the only server.
+// When an option fails, Load returns its error and leaves the viewer unchanged.
+func (v *OpenAPI3Viewer) Load(options ...OpenAPI3ViewerOption) error {
+	data, err := applyOptions(options...)
 	if err != nil {
-		v.logger.Error(err)
-		data = &OpenAPI3{}
+		return err
 	}
 
-	data.Servers = []Server{}
-
-	if !options.OnlyTLS {
-		httpURL := fmt.Sprintf("http://localhost:%d", options.Port)
-		data.Servers = append(data.Servers, Server{
-			URL:         httpURL,
-			Description: "HTTP server",
-		})
+	data.Servers = []Server{
+		{URL: "/", Description: "This server"},
 	}
-
-	if options.EnableTLS {
-		httpsURL := fmt.Sprintf("https://localhost:%d", options.PortTLS)
-		data.Servers = append(data.Servers, Server{
-			URL:         httpsURL,
-			Description: "HTTPS server",
-		})
-	}
-
-	data.Info.Version = options.Version
 
 	v.logger.Customf(SWAGGER, "Swagger interface displayed on %s", SWAGGER_ROUTE)
 	v.logger.Customf(SWAGGER, "Swagger JSON displayed on %s", SWAGGER_JSON)
 
 	v.data = *data
 
+	return nil
+}
+
+// DefineType documents every value of type t with schema instead of inferring
+// it from its fields: for types that encode themselves (uuid.UUID, a decimal)
+// or whose encoding has a format OpenAPI names.
+// Call it before the routes are registered.
+//
+// Returns the viewer itself for fluent configuration.
+func (v *OpenAPI3Viewer) DefineType(t reflect.Type, schema Schema) *OpenAPI3Viewer {
+	v.factory.defineType(t, schema)
 	return v
 }
 
@@ -178,13 +162,22 @@ func (v *OpenAPI3Viewer) Handlers() []docs.DocViewerHandler {
 
 func (v *OpenAPI3Viewer) doc(w http.ResponseWriter, r *http.Request) {
 	v.build.Do(func() {
-		v.data.Components = *v.factory.Components()
+		v.data.Components = *v.factory.components()
+
 		data, err := json.Marshal(v.data)
 		if err != nil {
 			v.logger.Error(err)
 		}
+
 		v.stringData = string(data)
 	})
+
+	if v.stringData == "" {
+		http.Error(w, "the OpenAPI definition could not be built", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 
 	_, err := w.Write([]byte(v.stringData))
 	if err != nil {
@@ -244,37 +237,68 @@ func (v *OpenAPI3Viewer) RegisterRoute(route docs.DocOperation) docs.IDocViewer 
 func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []Parameter {
 	parameters := make([]Parameter, 0)
 
-	for k, h := range v.headers {
-		if strings.HasPrefix(path, k) {
-			for n, d := range h {
-				parameters = append(parameters, v.makeParameter(n, d, "header"))
-			}
+	groups := paths.Groups(
+		path, slices.Collect(maps.Keys(v.headers)),
+	)
+
+	for _, group := range groups {
+		headers := v.headers[group]
+		names := slices.Sorted(maps.Keys(headers))
+
+		for _, name := range names {
+			parameters = append(parameters, Parameter{
+				Name:        name,
+				In:          "header",
+				Description: headers[name],
+				Required:    true,
+			})
 		}
 	}
 
-	for k, h := range v.cookies {
-		if strings.HasPrefix(path, k) {
-			for n, d := range h {
-				parameters = append(parameters, v.makeCookie(n, d))
-			}
+	groups = paths.Groups(
+		path, slices.Collect(maps.Keys(v.cookies)),
+	)
+
+	for _, group := range groups {
+		cookies := v.cookies[group]
+		names := slices.Sorted(maps.Keys(cookies))
+
+		for _, name := range names {
+			cookie := v.makeCookie(name, cookies[name])
+			parameters = append(parameters, cookie)
 		}
 	}
 
 	if route.Parameters != nil {
 		for _, d := range route.Parameters {
-			parameters = append(parameters, v.makeParameter(d.Code, d.Description, "path"))
+			parameters = append(parameters, Parameter{
+				Name:        d.Code,
+				In:          "path",
+				Description: d.Description,
+				Required:    true,
+			})
 		}
 	}
 
 	if route.Query != nil {
-		for n, d := range route.Query {
-			parameters = append(parameters, v.makeParameter(n, d, "query"))
+		names := slices.Sorted(maps.Keys(route.Query))
+
+		for _, name := range names {
+			parameters = append(parameters, Parameter{
+				Name:        name,
+				In:          "query",
+				Description: route.Query[name],
+				Required:    false,
+			})
 		}
 	}
 
 	if route.Cookies != nil {
-		for n, d := range route.Cookies {
-			parameters = append(parameters, v.makeCookie(n, d))
+		names := slices.Sorted(maps.Keys(route.Cookies))
+
+		for _, name := range names {
+			cookie := v.makeCookie(name, route.Cookies[name])
+			parameters = append(parameters, cookie)
 		}
 	}
 
@@ -282,20 +306,18 @@ func (v *OpenAPI3Viewer) makeParameters(path string, route docs.DocOperation) []
 }
 
 func (v *OpenAPI3Viewer) makeCookie(name string, description string) Parameter {
-	cookie := v.makeParameter(name, description, "cookie")
+	cookie := Parameter{
+		Name:        name,
+		In:          "cookie",
+		Description: description,
+		Required:    false,
+	}
+
 	cookie.Schema = &Schema{
 		Type: "string",
 	}
-	return cookie
-}
 
-func (v *OpenAPI3Viewer) makeParameter(name, description, category string) Parameter {
-	return Parameter{
-		Name:        name,
-		In:          category,
-		Description: description,
-		Required:    true,
-	}
+	return cookie
 }
 
 func (v *OpenAPI3Viewer) makeRequest(route docs.DocOperation) *RequestBody {
@@ -309,6 +331,10 @@ func (v *OpenAPI3Viewer) makeRequest(route docs.DocOperation) *RequestBody {
 		content[contentType] = *media
 	}
 
+	if len(content) == 0 {
+		return nil
+	}
+
 	return &RequestBody{
 		Description: route.Request.Description,
 		Content:     content,
@@ -320,7 +346,7 @@ func (v *OpenAPI3Viewer) makeMainRequest(route docs.DocOperation) (docs.MediaTyp
 		return "", nil
 	}
 
-	main, err := v.factory.MakeSchema(route.Request.MediaType, route.Request.Payload)
+	main, err := v.factory.makeSchema(route.Request.MediaType, route.Request.Payload)
 	if err != nil {
 		v.logger.Error(err)
 		return "", nil
@@ -357,17 +383,19 @@ func (v *OpenAPI3Viewer) makeFileRequest(route docs.DocOperation) (string, *Medi
 
 func (v *OpenAPI3Viewer) makeResponses(path string, route docs.DocOperation) map[string]Response {
 	reponses := make(map[string]Response)
-	for k, h := range v.responses {
-		if strings.HasPrefix(path, k) {
-			maps.Copy(reponses, h)
-		}
+
+	groups := paths.Groups(
+		path, slices.Collect(maps.Keys(v.responses)),
+	)
+
+	for _, group := range groups {
+		maps.Copy(reponses, v.responses[group])
 	}
 
 	result := v.makeResponsesFromMap(route.Responses)
 
-	maps.Copy(result, reponses)
-
-	return result
+	maps.Copy(reponses, result)
+	return reponses
 }
 
 func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs.DocPayload) map[string]Response {
@@ -377,11 +405,12 @@ func (v *OpenAPI3Viewer) makeResponsesFromMap(responses map[docs.StatusCode]docs
 
 	result := make(map[string]Response)
 	for status, response := range responses {
-		main, err := v.factory.MakeSchema(response.MediaType, response.Payload)
+		main, err := v.factory.makeSchema(response.MediaType, response.Payload)
 		if err != nil {
 			v.logger.Error(err)
 			return nil
 		}
+
 		result[string(status)] = Response{
 			Description: response.Description,
 			Content: map[string]MediaType{
@@ -411,16 +440,4 @@ func makeTags(route docs.DocOperation) []string {
 	}
 
 	return tags
-}
-
-func loadYAML(filename string) (*OpenAPI3, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-	var doc OpenAPI3
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, err
-	}
-	return &doc, nil
 }
